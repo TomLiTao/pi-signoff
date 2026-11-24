@@ -25,7 +25,9 @@ from urllib.parse import parse_qs, urlsplit
 
 
 CHECKPOINT = Path(__file__).resolve().with_name('protected-checkpoint.py')
-PI = Path.home() / '.local/bin/pi'
+# The installed launcher: pi-signoff, or a `pi` link made with PI_SIGNOFF_AS_PI=1 by older installs.
+PI = next((p for p in (Path.home() / '.local/bin/pi-signoff', Path.home() / '.local/bin/pi') if p.exists()),
+          Path.home() / '.local/bin/pi-signoff')
 
 
 def resolve_node_home():

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Install pi-plan-gate (Protected Pi) into ~/.local/lib/pi-protected and link ~/.local/bin/pi.
-# Safe to re-run. Refuses to replace a real ~/.local/bin/pi that is not a symlink.
+# Install pi-signoff into ~/.local/lib/pi-protected and link ~/.local/bin/pi-signoff.
+# PI_SIGNOFF_AS_PI=1 also links ~/.local/bin/pi (an existing link to this install is kept up to date).
+# Safe to re-run. Never replaces a real file with a link.
 # PI_SKIP_RUNTIMES=1 skips the optional helper runtimes (basedpyright, DuckDB).
 # PI_NODE_HOME=/path/to/node-prefix selects the Node install that holds Pi (default: found automatically).
 set -euo pipefail
@@ -25,12 +26,12 @@ find_node_home() {
 }
 
 if ! NODE_HOME=$(find_node_home); then
-  echo "pi-plan-gate: no Node install with Pi found." >&2
+  echo "pi-signoff: no Node install with Pi found." >&2
   echo "Install Pi with 'npm install -g @earendil-works/pi-coding-agent@$TESTED_PI' using a self-contained Node" >&2
   echo "(official tarball, nvm, fnm or volta), or set PI_NODE_HOME to that Node's prefix." >&2
   exit 1
 fi
-PI_VERSION=$("$NODE_HOME/bin/node" -p "require('$NODE_HOME/$PI_PACKAGE/package.json').version")
+PI_VERSION=$("$NODE_HOME/bin/node" -p 'require(process.argv[1]).version' "$NODE_HOME/$PI_PACKAGE/package.json")
 echo "Pi $PI_VERSION in $NODE_HOME"
 [ "$PI_VERSION" = "$TESTED_PI" ] || echo "warning: tested with Pi $TESTED_PI; the bundle patches may not apply to $PI_VERSION (see /doctor)" >&2
 BASE=harness
@@ -56,7 +57,7 @@ link() {  # link <target> <link-path>
 install_agent_runtimes() {
   [ "${PI_SKIP_RUNTIMES:-0}" = 1 ] && return 0
   local have
-  have=$(PATH="$NODE_HOME/bin:$PATH" node -p "require('$NODE_HOME/lib/node_modules/basedpyright/package.json').version" 2>/dev/null || true)
+  have=$("$NODE_HOME/bin/node" -p 'require(process.argv[1]).version' "$NODE_HOME/lib/node_modules/basedpyright/package.json" 2>/dev/null || true)
   if [ "$have" != "$BASEDPYRIGHT_VERSION" ] && [ -x "$NODE_HOME/bin/npm" ]; then
     echo "installing basedpyright $BASEDPYRIGHT_VERSION (pi_safe_code)"
     PATH="$NODE_HOME/bin:$PATH" npm install -g --no-fund --no-audit "basedpyright@$BASEDPYRIGHT_VERSION" >/dev/null \
@@ -81,11 +82,11 @@ install_agent_runtimes() {
 }
 
 if [ ! -x "$NODE_HOME/bin/pi" ]; then
-  echo "pi-plan-gate: $NODE_HOME/bin/pi is missing; reinstall Pi into that Node." >&2
+  echo "pi-signoff: $NODE_HOME/bin/pi is missing; reinstall Pi into that Node." >&2
   exit 1
 fi
 for tool in /usr/bin/bwrap /usr/bin/python3 /usr/bin/git; do
-  [ -x "$tool" ] || { echo "pi-plan-gate: missing $tool" >&2; exit 1; }
+  [ -x "$tool" ] || { echo "pi-signoff: missing $tool" >&2; exit 1; }
 done
 
 core=(sandbox.py protected-checkpoint.py mcp-bridge.py tool-worker.mjs write-guard.json empty-secret web-search.py
@@ -118,7 +119,11 @@ install_agent_runtimes
 # The bundle patches (trust notice, openable file links) live in the installed Pi; reapply after any Pi update.
 /usr/bin/python3 -I "$PROTECTED/patch-pi-bundle.py" apply "$NODE_HOME" \
   || echo "warning: a Pi bundle patch was not applied (see /doctor)" >&2
-link "$PROTECTED/pi" "$HOME/.local/bin/pi"
+link "$PROTECTED/pi" "$HOME/.local/bin/pi-signoff"
+# Shadowing the stock `pi` command is opt-in; a `pi` link that already points here stays current.
+if [ "${PI_SIGNOFF_AS_PI:-0}" = 1 ] || [ "$(readlink "$HOME/.local/bin/pi" 2>/dev/null)" = "$PROTECTED/pi" ]; then
+  link "$PROTECTED/pi" "$HOME/.local/bin/pi"
+fi
 
 # Recommended Pi settings (default model, long idle timeout, telemetry off). Never overwrites yours.
 if [ ! -e "$PI_AGENT_DIR/settings.json" ]; then
@@ -127,4 +132,4 @@ if [ ! -e "$PI_AGENT_DIR/settings.json" ]; then
 else
   echo "$PI_AGENT_DIR/settings.json exists; left unchanged (compare with config/pi-settings.json)"
 fi
-[ -s "$PI_AGENT_DIR/auth.json" ] || echo "next: sign in to a model provider (run pi, then /login)"
+[ -s "$PI_AGENT_DIR/auth.json" ] || echo "next: sign in to a model provider (run pi-signoff, then /login)"

@@ -1,6 +1,6 @@
-# pi-plan-gate
+# pi-signoff
 
-**Approve once, between planning and execution.** pi-plan-gate is a hardening and workflow layer for the
+**Approve once, between planning and execution.** pi-signoff is a hardening and workflow layer for the
 [Pi coding agent](https://www.npmjs.com/package/@earendil-works/pi-coding-agent) (`@earendil-works/pi-coding-agent`).
 The agent explores read-only, then submits one plan listing every permission it will need: shell commands,
 sensitive files, worktree subagents. You review that plan once and approve, revise or reject it. Approved
@@ -8,8 +8,9 @@ work then runs without interruptions. Anything the plan did not ask for is rejec
 not prompted mid-run.
 
 Every tool call also runs inside a [Bubblewrap](https://github.com/containers/bubblewrap) sandbox, with Git
-checkpoints before each turn's first change. The terminal experience is modelled on Factory Droid and Claude
-Code.
+checkpoints before each turn's first change. The terminal experience is modelled on
+[Factory's Droid](https://factory.ai) and [Anthropic's Claude Code](https://www.anthropic.com/claude-code); see
+[Acknowledgements](#acknowledgements).
 
 > **Status:** a personal configuration, published as is. It has been developed and tested on one Linux
 > workstation with Pi 1.6.0 and the OpenAI Codex provider. It has had no independent security review; read
@@ -21,11 +22,11 @@ Code.
 - [How it differs from stock Pi](#how-it-differs-from-stock-pi)
 - [Install](#install)
 - [Will it behave like the author's setup?](#will-it-behave-like-the-authors-setup)
-- [Tests](#tests) · [Layout](#layout) · [Licence](#licence)
+- [Tests](#tests) · [Layout](#layout) · [Acknowledgements](#acknowledgements) · [Licence](#licence)
 
 ## The plan gate
 
-In **workflow mode** (`pi --workflow`, `/mode workflow`, or `Ctrl+Alt+Y` to cycle modes) the sequence is enforced:
+In **workflow mode** (`pi-signoff --workflow`, `/mode workflow`, or `Ctrl+Alt+Y` to cycle modes) the sequence is enforced:
 
 1. **Plan (read-only).** Read-only tools and routine read-only shell commands run in a read-only mount.
    Edits and non-routine commands are blocked.
@@ -49,7 +50,7 @@ or sensitive edits.
 
 ### Safety and approvals
 
-| Feature | Stock Pi | pi-plan-gate |
+| Feature | Stock Pi | pi-signoff |
 |---|---|---|
 | Tool execution | On your host as your user | Each call in a fresh Bubblewrap sandbox. Secret-named files (`.env*`, keys) and their hardlinks are hidden; writes are limited to the launch folder, its Git directory and a private `/tmp`. `--strict` also removes network access and hides `$HOME`. |
 | Tools the model sees | Built-in `read`, `bash`, `edit`, … | Only `pi_safe_*` wrappers; built-in tools are switched off |
@@ -82,7 +83,7 @@ terminal UX:
 
 ### Claude Code–style features
 
-| Claude Code | pi-plan-gate equivalent |
+| Claude Code | pi-signoff equivalent |
 |---|---|
 | Permission modes (plan, default, accept edits) | `/mode plan`, `ask-edits`, `accept-edits`, plus `workflow` (the plan gate); per-folder defaults with `/mode default` |
 | `AskUserQuestion` | `pi_safe_ask_user`: up to 4 single- or multi-choice questions, with recommended options and free-text answers |
@@ -95,6 +96,7 @@ terminal UX:
 | Output styles, notifications | `/style` (concise, explanatory, terse, custom); `/notify` bell cues |
 | MCP and tool search | Sandboxed stdio MCP bridges (`~/.config/pi-protected/mcp.json`); deferred servers promoted on demand via `tool_search` |
 | `/doctor` | Checks the installed files, sandbox, checkpoint, hooks, MCP and Pi bundle patches |
+| Worktrees | `/worktree new <task>` creates `.claude/worktrees/<task>` on branch `pi/<task>`, the layout Claude Code uses; `done` merges and removes it |
 
 ### Other additions
 
@@ -121,9 +123,9 @@ Requirements:
 
 ```bash
 npm install -g @earendil-works/pi-coding-agent@1.6.0     # tested version
-git clone <this repository> pi-plan-gate && cd pi-plan-gate
+git clone <this repository> pi-signoff && cd pi-signoff
 ./install.sh            # PI_NODE_HOME=/node/prefix to choose a Node; PI_SKIP_RUNTIMES=1 to skip basedpyright/DuckDB
-cd ~/some/project && pi --workflow                       # run from a project folder, not from $HOME
+cd ~/some/project && pi-signoff --workflow               # run from a project folder, not from $HOME
 ```
 
 `install.sh`:
@@ -134,6 +136,12 @@ cd ~/some/project && pi --workflow                       # run from a project fo
 
 Re-run it after updating Pi. Inside Pi, `/doctor` confirms that the install matches the checkout and that the
 patches are applied. On first start, sign in to a provider with `/login`.
+
+The command is `pi-signoff`, so the stock `pi` keeps working. To use pi-signoff as `pi`, install with
+`PI_SIGNOFF_AS_PI=1 ./install.sh`; a `pi` link that already points at this install is kept up to date.
+Internally the harness keeps its original name, Protected Pi: files live under `~/.local/lib/pi-protected`,
+`~/.config/pi-protected` and `~/.local/state/pi-protected`, settings use `PI_PROTECTED_*` variables, and
+checkpoints go to `refs/pi-protected-checkpoints/`.
 
 ## Will it behave like the author's setup?
 
@@ -171,8 +179,32 @@ recorded by `install.sh`).
 | `harness/write-guard.json` | Path and command policy (ask, deny, secret, never-auto) |
 | `config/pi-settings.json` | Recommended Pi settings |
 
+## Acknowledgements
+
+- **[Pi](https://github.com/earendil-works/pi)** by Mario Zechner, the agent this project extends (MIT).
+- **[pi-plan](https://github.com/zx06/pi-packages/tree/main/packages/plan)** by the pi-packages contributors,
+  vendored as the plan-mode base (MIT).
+- **[Droid](https://docs.factory.ai/cli/getting-started/overview) by Factory.** The interface and several workflow ideas follow
+  Droid's terminal experience:
+  - autonomy levels named Auto Off/Low/Medium, cycled with Shift+Tab;
+  - Spec mode;
+  - custom droids, including the `.factory/droids/` folder, read so existing project droids work;
+  - the tool-row style and the changed-files review line.
+- **[Claude Code](https://docs.claude.com/en/docs/claude-code/overview) by Anthropic.** Many features follow
+  Claude Code:
+  - permission modes, hooks (with the same event names), skills and `CLAUDE.md` support;
+  - the structured question tool, subagents, `/rewind`, output styles, `/context` and `/doctor`;
+  - the `.claude/worktrees` layout.
+
+pi-signoff is an independent, unofficial project. It is not affiliated with, endorsed by or sponsored by
+Earendil, Factory or Anthropic. It contains no code, text, artwork or other assets from Droid or Claude Code;
+the similarities are in behaviour and layout only. Factory, Droid, Claude, Claude Code and Anthropic are
+trademarks of their respective owners and are used here only to describe compatibility and inspiration.
+
+Much of the code was written with AI coding agents (OpenAI Codex and Anthropic's Claude Code) under the
+author's direction.
+
 ## Licence
 
-MIT; see [LICENSE](LICENSE). The vendored `harness/extensions/pi-plan/` keeps its own MIT licence; see
-[THIRD_PARTY.md](THIRD_PARTY.md). "Factory", "Droid" and "Claude Code" are mentioned only to describe
-interface similarities.
+MIT; see [LICENSE](LICENSE). Third-party code, the tools `install.sh` downloads, and the online services the
+web tools use are listed in [THIRD_PARTY.md](THIRD_PARTY.md).

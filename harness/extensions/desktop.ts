@@ -447,17 +447,23 @@ export function registerDoctor(pi: ExtensionAPI, options: DoctorOptions) {
           .then(() => 'present', () => 'missing or invalid') : 'not created at launch',
         options.inspectCollapsed ? options.inspectCollapsed(launch).catch(() => undefined) : Promise.resolve(undefined),
       ]);
-      let launcher = 'missing or points elsewhere';
-      try {
-        if (realpathSync(path.join(homedir(), '.local/bin/pi')) === path.join(realpathSync(options.dir), 'pi')) launcher = 'linked';
-      } catch { /* No default launcher link. */ }
+      const linkState = (name: string) => {
+        try {
+          return realpathSync(path.join(homedir(), '.local/bin', name)) === path.join(realpathSync(options.dir), 'pi')
+            ? 'linked' : 'points elsewhere';
+        } catch {
+          return 'not linked';
+        }
+      };
+      // pi-signoff is always linked; `pi` only when the user opted in.
+      const launcher = `${linkState('pi-signoff')}; ~/.local/bin/pi: ${linkState('pi')}`;
       const model = ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : 'none selected';
       const tools = pi.getActiveTools().map(clean);
       const mode = options.isPlanning() ? 'read-only (plan)' : options.writeRoot === launch
         ? 'writable (startup checkpoint gate)' : 'read-only (no launch checkpoint)';
       ctx.ui.notify([
         'Protected Pi diagnostics (no provider request)',
-        `Install: ${inspectInstallation(options.dir, startupId)}`, `Pi bundle patch: ${inspectBundlePatch()}`, `~/.local/bin/pi: ${launcher}`,
+        `Install: ${inspectInstallation(options.dir, startupId)}`, `Pi bundle patch: ${inspectBundlePatch()}`, `~/.local/bin/pi-signoff: ${launcher}`,
         `Sandbox: ${sandbox ? 'read-only probe passed' : 'read-only probe failed (check Bubblewrap and workspace mounts)'}`,
         ...(collapsed !== undefined ? [`Collapsed mask dirs: ${collapsed.length
           ? `${collapsed.map(clean).join(', ')} (masked as empty; use UV_LINK_MODE=copy or pnpm --package-import-method=copy)`
