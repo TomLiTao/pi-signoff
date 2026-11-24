@@ -221,9 +221,10 @@ export function registerGitTools(pi: ExtensionAPI, options: GitToolsOptions) {
       name: gitToolName,
       label: 'Read-Only Git Inspect',
       promptSnippet: 'Inspect Git repository state read-only (status, diff, log, show, blame, ls-files)',
-      description: process.env.PI_PROTECTED_ACCESS === 'host'
+      description: (process.env.PI_PROTECTED_ACCESS === 'host'
         ? 'Run a read-only Git inspection command (status, log, diff, show, blame, ls-files) with secret paths excluded. For anything else (commit, branch, merge, worktree, branch listing) use git in pi_safe_bash; for fetch/pull/push use pi_safe_git_remote.'
-        : 'Run a read-only Git inspection command (status, log, diff, show, blame, ls-files) inside the sandbox with .git mounted read-only and secret paths excluded.',
+        : 'Run a read-only Git inspection command (status, log, diff, show, blame, ls-files) inside the sandbox with .git mounted read-only and secret paths excluded.')
+        + ' Flags and revisions go in args (combined short flags such as -sb work; pickaxe text is attached, as in -Sneedle); file filters go in paths. To read a file as of a revision, use show with args ["<rev>:<path>"]. A rejected flag error lists the allowed flags.',
       parameters: {
         type: 'object',
         required: ['subcommand'],

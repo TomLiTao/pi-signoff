@@ -23,6 +23,7 @@ import { registerDroids, resolveDelegateExecution, type DroidsHandle } from './d
 import { gitRemoteToolName, gitToolName, registerGitTools } from './git-tools.ts';
 import { registerHooks, type HooksHandle } from './hooks.ts';
 import { createMaskCache } from './mask-cache.ts';
+import { createOutputBudget, registerOutputBudget } from './output-budget.ts';
 import { registerMcpBridges, type McpBridgesHandle } from './mcp-bridge.ts';
 import { memoryToolName, registerMemory, type MemoryHandle } from './memory.ts';
 import { keepToolOrderStable } from './tool-order.ts';
@@ -62,6 +63,7 @@ const delegateTool = 'pi_safe_delegate';
 const jobNames = [jobStart, jobStatus, jobCancel, checkTool, delegateTool];
 const gate = createToolGate(4);
 const maskCache = createMaskCache(dir);
+const outputBudget = createOutputBudget();
 const worker = process.env.PI_PROTECTED_WORKER === '1';
 const worktreeWorker = worker && process.env.PI_PROTECTED_WORKTREE_WORKER === '1';
 const workerPlanning = worker && !worktreeWorker && process.env.PI_PROTECTED_WORKER_PLAN === '1';
@@ -80,6 +82,9 @@ function sandboxInvocation(mode: '--tool' | '--shell' | '--lsp' | '--data', cwd:
   const env = { ...process.env };
   delete env.PI_SANDBOX_MASKS_FD;
   delete env.PI_SANDBOX_SKILL_MOUNTS;
+  delete env.PI_SANDBOX_OUTPUT_DIR;
+  const outputDir = outputBudget.hostDir();
+  if (outputDir && (mode === '--tool' || mode === '--shell')) env.PI_SANDBOX_OUTPUT_DIR = outputDir;
   if (!worker) {
     const mounts = getSkillMounts();
     if (mounts.length > 0) env.PI_SANDBOX_SKILL_MOUNTS = JSON.stringify(mounts);
@@ -630,7 +635,7 @@ export default async function (pi: ExtensionAPI) {
           'Protected Pi commands (user-only slash commands): /mode, /workflow, /plan, /rejected, /permissions, /instructions, /doctor, /diff, /review, /rewind, /open, /clip.';
         const guidelines = (event.systemPromptOptions.promptGuidelines ??= []);
         const headlessRule =
-          'pi_safe_bash and pi_safe_job_start run inside a headless Linux sandbox without DISPLAY or WAYLAND_DISPLAY: use headless CLI flags (such as libreoffice --headless --convert-to pdf) inside pi_safe_bash, and use pi_safe_open (requesting permissions.openFiles in pi_safe_plan) when the user asks to open a workspace file on the host desktop.';
+          'pi_safe_bash and pi_safe_job_start run inside a headless Linux sandbox without DISPLAY or WAYLAND_DISPLAY: use headless CLI flags (such as libreoffice --headless --convert-to pdf) inside pi_safe_bash, and use pi_safe_open (requesting permissions.openFiles in pi_safe_plan) when the user asks to open a workspace file on the host desktop. Each tool call gets its own empty /tmp, so files left in /tmp do not survive to the next call; keep files that later calls need in the project folder. When a long result is shortened, its full text is saved under /tmp/pi-tool-output/ (read-only, visible to later calls in this session): page through it with pi_safe_read offset/limit or search it with pi_safe_grep instead of re-running the command.';
         if (!guidelines.includes(headlessRule)) guidelines.push(headlessRule);
         if (hostAccess) {
           const accessRule =
@@ -2017,9 +2022,13 @@ export default async function (pi: ExtensionAPI) {
           if (bytes > limit) throw new Error('Protected tool output exceeded its limit.');
           const output = Buffer.concat(chunks).toString('utf8');
           if (code !== 0) throw new Error(output.trim() || `Sandbox exited with code ${code}`);
-          const { result, error } = JSON.parse(output);
-          if (error) throw new Error(error);
-          return result;
+          const { result, error, fullOutput } = JSON.parse(output);
+          const adopt = <T>(value: T): T =>
+            fullOutput && typeof fullOutput.path === 'string' && typeof fullOutput.text === 'string'
+              ? outputBudget.adoptFullOutput(id, `${toolPrefix}${name}`, fullOutput.path, fullOutput.text, value)
+              : value;
+          if (error) throw new Error(adopt(String(error)));
+          return adopt(result);
         };
         if (isReadOnly) {
           const result = await gate.runRead(executeInSandbox);
@@ -2042,4 +2051,6 @@ export default async function (pi: ExtensionAPI) {
       },
     });
   }
+  // Last tool_result handler: hooks, diagnostics and labels above see and shape the full text first.
+  registerOutputBudget(pi, outputBudget);
 }

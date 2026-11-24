@@ -145,6 +145,21 @@ def read_body(response, limit):
     return data[:limit], len(data) > limit or bool(inflater.unconsumed_tail) or len(raw) > limit
 
 
+def http_error_message(status):
+    """Name the HTTP status and say what to do next, so the model does not retry a dead end."""
+    message = f'Public page returned HTTP {status}.'
+    if status in (404, 410):
+        return message + ' The page does not exist at this URL: check the address, or search for where it moved.'
+    if status in (401, 402, 403, 406, 415, 451):
+        return message + (' The site refuses this request (login, paywall or a block on automated clients). '
+                          'Retrying will not help; use another source, such as a mirror, an official API, '
+                          'an archived copy or a search result that quotes it.')
+    if status in (202, 429, 502, 503, 504):
+        return message + (' The site is busy, rate-limiting or serving a bot check. Use another source, '
+                          'or try again later rather than immediately.')
+    return message
+
+
 def get(url, accept=ACCEPT):
     """GET with validated, DNS-pinned public endpoints and bounded redirects."""
     previous_scheme = None
@@ -166,7 +181,7 @@ def get(url, accept=ACCEPT):
                     url = urljoin(url, location)
                     continue
                 if response.status != 200:
-                    raise ValueError(f'Public page returned HTTP {response.status}.')
+                    raise ValueError(http_error_message(response.status))
                 media = response.headers.get_content_type() if response.getheader('Content-Type') else ''
                 limit = MAX_PDF if media in ('application/pdf', 'application/octet-stream') else MAX_BODY
                 data, truncated = read_body(response, limit)

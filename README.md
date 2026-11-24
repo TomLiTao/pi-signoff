@@ -100,6 +100,9 @@ terminal UX:
 ### Other additions
 
 - Background jobs announce completion themselves, so the model does not poll.
+- Long tool output (shell, jobs, Git, search, listings) is shortened to a per-tool budget, keeping the head and
+  tail. The full text is saved for the session under `~/.cache/pi-protected/tool-output/` and mounted
+  read-only at `/tmp/pi-tool-output`, so the model can page through it instead of re-running the command.
 - `pi_safe_code`: basedpyright diagnostics, definitions, references and rename previews. It also runs a check
   after every Python edit.
 - `pi_safe_data`: preview CSV, JSON or Parquet files, or run read-only DuckDB SQL on them.

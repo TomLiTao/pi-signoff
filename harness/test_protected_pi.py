@@ -501,6 +501,16 @@ class WebFetchTests(unittest.TestCase):
         response.__enter__.return_value = response
         return SimpleNamespace(request=MagicMock(), getresponse=lambda: response, close=MagicMock())
 
+    def test_http_errors_say_what_to_do_next(self):
+        message = self.worker.http_error_message
+        self.assertTrue(message(404).startswith('Public page returned HTTP 404.'))
+        self.assertIn('check the address', message(410))
+        for status in (401, 403, 406, 415):
+            self.assertIn('Retrying will not help', message(status))
+        for status in (202, 429, 503):
+            self.assertIn('try again later', message(status))
+        self.assertEqual(message(418), 'Public page returned HTTP 418.')
+
     def test_rejects_nonpublic_urls_and_mixed_dns_answers(self):
         for url in ('file:///etc/passwd', 'https://localhost/', 'http://127.0.0.1/', 'https://[::1]/',
                     'http://169.254.169.254/', 'http://100.64.0.1/', 'http://[::ffff:8.8.8.8]/',
@@ -2979,6 +2989,85 @@ console.log(JSON.stringify({
         )
         self.assertEqual(log_fmt_res.returncode, 0, log_fmt_res.stderr)
         self.assertIn('Initial clean commit', log_fmt_res.stdout)
+
+    def test_sandbox_git_flag_forms_path_hints_and_saved_tool_output(self):
+        sandbox = Path(__file__).resolve().with_name('sandbox.py')
+        node_home = str(NODE_HOME)
+
+        def call(mode, payload, access='host', **extra):
+            env = self.env | {'PI_PROTECTED_ACCESS': access} | extra
+            return subprocess.run(
+                [sys.executable, '-I', str(sandbox), mode, str(self.work), node_home],
+                input=json.dumps(payload), text=True, capture_output=True, env=env, timeout=30,
+            )
+
+        commit = ['-c', 'user.name=T', '-c', 'user.email=t@e.invalid', 'commit', '-q', '-m']
+        self.git(*commit, 'v1')
+        (self.work / 'public.txt').write_text('changed\n', encoding='utf-8')
+        self.git('add', 'public.txt')
+        self.git(*commit, 'v2')
+
+        for access in ('host', 'strict'):
+            with self.subTest(access=access):
+                # Combined short flags split into allowed ones.
+                st = call('--git', {'subcommand': 'status', 'args': ['-sb']}, access)
+                self.assertEqual(st.returncode, 0, st.stderr)
+                self.assertIn('##', st.stdout)
+                # A file as of a revision; secret and escaping paths stay refused.
+                old = call('--git', {'subcommand': 'show', 'args': ['HEAD~1:public.txt']}, access)
+                self.assertEqual(old.returncode, 0, old.stderr)
+                self.assertEqual(old.stdout, 'zebra\napple\n')
+                for bad in ('HEAD:.env', 'HEAD:../x', 'HEAD:.ssh/id_rsa', '-x:public.txt'):
+                    res = call('--git', {'subcommand': 'show', 'args': [bad]}, access)
+                    self.assertNotEqual(res.returncode, 0, bad)
+                self.assertIn("only accepted by git show",
+                              call('--git', {'subcommand': 'diff', 'args': ['HEAD:public.txt']}, access).stderr)
+                # Attached pickaxe, --stat=<width> and --date=format:.
+                lg = call('--git', {'subcommand': 'log', 'args': ['-Szebra', '--stat=80', '--date=format:%Y', '--format=%ad %s']}, access)
+                self.assertEqual(lg.returncode, 0, lg.stderr)
+                self.assertIn('v2', lg.stdout)
+                # Rejections list what is allowed.
+                rej = call('--git', {'subcommand': 'status', 'args': ['-sz']}, access)
+                self.assertIn('Allowed: ', rej.stderr)
+                self.assertIn('--porcelain', rej.stderr)
+        self.assertIn('available only in host access mode',
+                      call('--git', {'subcommand': 'log', 'args': ['--all']}, 'strict').stderr)
+
+        # Missing paths outside the workspace say why instead of only "not found".
+        for path, expected in (('/tmp/earlier-call.png', 'own empty /tmp'),
+                               ('/home/nobody-here/x.md', 'outside the project folder')):
+            res = call('--tool', {'id': 'r', 'name': 'read', 'params': {'path': path}})
+            self.assertEqual(res.returncode, 0, res.stderr)
+            self.assertIn(expected, json.loads(res.stdout)['error'])
+
+        # Long bash output: the worker returns the full text of Pi's temp file before /tmp is discarded.
+        res = call('--tool', {'id': 'b', 'name': 'bash', 'params': {'command': 'seq 1 200000'}})
+        self.assertEqual(res.returncode, 0, res.stderr)
+        out = json.loads(res.stdout)
+        self.assertRegex(out['result']['content'][0]['text'], r'Full output: /tmp/pi-bash-\w+\.log\]$')
+        self.assertEqual(out['fullOutput']['text'].splitlines()[-1], '200000')
+        self.assertEqual(len(out['fullOutput']['text'].splitlines()), 200000)
+
+        # The session's saved output is mounted read-only; only a private folder in the cache is accepted.
+        home = Path.home()
+        saved_base = home / '.cache' / 'pi-protected' / 'tool-output'
+        saved_base.mkdir(parents=True, exist_ok=True, mode=0o700)
+        saved = Path(tempfile.mkdtemp(prefix='s-', dir=saved_base))
+        self.addCleanup(shutil.rmtree, saved, True)
+        (saved / '0001-pi_safe_bash.txt').write_text('saved line\n', encoding='utf-8')
+        for access in ('host', 'strict'):
+            res = call('--tool', {'id': 'r', 'name': 'bash',
+                                  'params': {'command': 'cat /tmp/pi-tool-output/0001-pi_safe_bash.txt; touch /tmp/pi-tool-output/new'}},
+                       access, PI_SANDBOX_OUTPUT_DIR=str(saved))
+            self.assertEqual(res.returncode, 0, res.stderr)
+            text = json.loads(res.stdout)['result']['content'][0]['text']
+            self.assertIn('saved line', text)
+            self.assertIn('Read-only file system', text)
+        self.assertFalse((saved / 'new').exists())
+        for bad in ('/etc', str(home / '.ssh'), str(saved_base), str(saved_base / '..' / 'audit')):
+            res = call('--tool', {'id': 'r', 'name': 'ls', 'params': {}}, PI_SANDBOX_OUTPUT_DIR=bad)
+            self.assertNotEqual(res.returncode, 0, bad)
+            self.assertIn('invalid tool output folder', res.stderr)
 
     def test_part7_paused_plan_ux_context_stability_job_wait_and_tool_snippets(self):
         node_home = NODE_HOME

@@ -149,6 +149,31 @@ const VIA_LABELS: Record<string, string> = {
   'markdown-alternate': "the page's Markdown version",
 };
 
+/**
+ * Accept the argument spellings models commonly use (max_chars, maxLength) and clamp an
+ * out-of-range maxChars, instead of failing validation and costing a retry.
+ */
+export function prepareFetchArguments(args: unknown): unknown {
+  if (!args || typeof args !== 'object' || Array.isArray(args)) return args;
+  const out: Record<string, unknown> = { ...(args as Record<string, unknown>) };
+  const aliases: Record<string, string> = {
+    max_chars: 'maxChars', maxLength: 'maxChars', max_length: 'maxChars', limit: 'maxChars',
+    start_index: 'offset', startIndex: 'offset',
+  };
+  for (const [alias, name] of Object.entries(aliases)) {
+    if (alias in out) {
+      if (out[name] === undefined) out[name] = out[alias];
+      delete out[alias];
+    }
+  }
+  if (typeof out.maxChars === 'string' && /^\d+$/.test(out.maxChars)) out.maxChars = Number(out.maxChars);
+  if (typeof out.maxChars === 'number' && Number.isFinite(out.maxChars)) {
+    out.maxChars = Math.min(MAX_MAX_CHARS, Math.max(500, Math.floor(out.maxChars)));
+  }
+  if (typeof out.offset === 'string' && /^\d+$/.test(out.offset)) out.offset = Number(out.offset);
+  return out;
+}
+
 export function formatFetched(doc: FetchedDocument, opts: { offset?: number; maxChars?: number; find?: string }, cachedAgeMs?: number): string {
   const slice = sliceDocument(doc.text, opts);
   const via = doc.via ? ` via ${VIA_LABELS[doc.via] ?? doc.via}` : '';
@@ -193,6 +218,7 @@ export function registerWebFetch(
       find: Type.Optional(Type.String({ minLength: 2, maxLength: 120, description: 'Return only passages around this term (case-insensitive).' })),
       fresh: Type.Optional(Type.Boolean({ description: 'Bypass the 30-minute cache.' })),
     }, { additionalProperties: false }),
+    prepareArguments: args => prepareFetchArguments(args) as never,
     executionMode: 'parallel',
     async execute(_id, { url, offset, maxChars, find, fresh }, signal) {
       blockIfSecret(guard, url, webFetchTool, 'URL');

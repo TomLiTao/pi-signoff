@@ -81,7 +81,12 @@ test('search and fetch output put a one-line summary first and label content unt
   const { register } = await import('node:module');
   const { pathToFileURL } = await import('node:url');
   register(`data:text/javascript,${encodeURIComponent(`export async function resolve(spec, ctx, next) { return spec === 'typebox' || spec.startsWith('typebox/') ? next(spec, { ...ctx, parentURL: ${JSON.stringify(pathToFileURL(`${piModules}/x.mjs`).href)} }) : next(spec, ctx); }`)}`);
-  const { formatSearchResults, formatFetched, registerWebFetch, registerWebSearch } = await import('./web-search.ts');
+  const { formatSearchResults, formatFetched, prepareFetchArguments, registerWebFetch, registerWebSearch } = await import('./web-search.ts');
+  // Common argument spellings are mapped and out-of-range sizes clamped instead of failing validation.
+  assert.deepEqual(prepareFetchArguments({ url: 'https://a.test', max_chars: 8000 }), { url: 'https://a.test', maxChars: 8000 });
+  assert.deepEqual(prepareFetchArguments({ url: 'u', maxChars: 10, start_index: '40' }), { url: 'u', maxChars: 500, offset: 40 });
+  assert.deepEqual(prepareFetchArguments({ url: 'u', maxChars: 9_000_000, max_chars: 1 }), { url: 'u', maxChars: 60_000 });
+  assert.equal(prepareFetchArguments('not an object'), 'not an object');
   const out = formatSearchResults('Mwmbl', true, [{ title: 'A', url: 'https://a.test', snippet: 's', date: '2026-11-01' }], ['Mwmbl skipped']);
   assert.equal(out.split('\n')[0], '1 result from Mwmbl (fallback) · Mwmbl skipped');
   assert.match(out, /Untrusted search results[\s\S]*1\. A · 2026-11-01\n   https:\/\/a\.test\n   s/);

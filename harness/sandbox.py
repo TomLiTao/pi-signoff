@@ -540,36 +540,109 @@ def hardened_git_env():
     return env
 
 
+# Flag shapes accepted by pattern, shown in rejection messages so the model can retry correctly.
+GIT_PATTERN_FLAGS = {
+    'log': ('-n<N>', '-<N>', '--max-count=<N>', '--since=<date>', '--until=<date>', '--author=<text>',
+            '--grep=<text>', '-S<text>', '-G<regex>', '--format=<fmt>', '--pretty=<fmt>', '--date=format:<fmt>',
+            '-U<N>', '--unified=<N>', '--stat=<width>'),
+    'show': ('--format=<fmt>', '--pretty=<fmt>', '--date=format:<fmt>', '-U<N>', '--unified=<N>', '--stat=<width>'),
+    'diff': ('-U<N>', '--unified=<N>', '--stat=<width>'),
+    'blame': ('-L<start>,<end>',),
+}
+
+
+def git_flag_allowed(subcommand, token):
+    if token in GIT_SAFE_FLAGS[subcommand]:
+        return True
+    if access_mode() == 'host' and token in GIT_HOST_FLAGS.get(subcommand, ()):
+        return True
+    if subcommand in ('log', 'diff', 'show') and (
+        re.fullmatch(r'-U\d{1,3}|--unified=\d{1,3}', token)
+        or re.fullmatch(r'--stat=\d{1,4}(,\d{1,4}){0,2}', token)
+    ):
+        return True
+    if subcommand in ('log', 'show') and (
+        re.fullmatch(
+            r'--(format|pretty)=(oneline|short|medium|full|fuller|reference|raw|(t?format:)?[a-zA-Z0-9_%.,:/+ -]{1,120})',
+            token,
+        )
+        or re.fullmatch(r'--date=format(-local)?:[a-zA-Z0-9_%.,:/+ -]{1,60}', token)
+    ):
+        return True
+    if subcommand == 'log' and (
+        re.fullmatch(r'-n\d{1,3}|-\d{1,3}|--max-count=\d{1,3}', token)
+        or re.fullmatch(r'--(since|until|author|grep)=[a-zA-Z0-9_./:@+ -]{1,120}', token)
+        # Pickaxe: the search text must be attached (-Sfoo), so it cannot be read as a revision.
+        or re.fullmatch(r'-[SG][a-zA-Z0-9_./:@+ -]{1,120}', token)
+    ):
+        return True
+    if subcommand == 'blame' and re.fullmatch(r'-L\d{1,6},\+?\d{1,6}', token):
+        return True
+    return False
+
+
+def git_flag_error(subcommand, token):
+    message = f'disallowed git flag for {subcommand}: {token}'
+    if token in GIT_HOST_FLAGS.get(subcommand, ()):
+        return f'{message} (available only in host access mode; this session runs in strict mode)'
+    allowed = sorted(GIT_SAFE_FLAGS[subcommand])
+    if access_mode() == 'host':
+        allowed += sorted(GIT_HOST_FLAGS.get(subcommand, ()))
+    allowed += GIT_PATTERN_FLAGS.get(subcommand, ())
+    hint = f'. Allowed: {", ".join(allowed)}'
+    if subcommand in ('log', 'diff', 'show', 'blame'):
+        hint += '. Revisions go in args; file filters go in paths'
+        if subcommand == 'show':
+            hint += "; a file at a revision is '<rev>:<path>'"
+    return message + hint
+
+
+def expand_git_short_flags(subcommand, args):
+    """Split combined short flags (`-sb`) into flags this validator knows (`-s`, `-b`).
+
+    Only letters are split, and only when every resulting flag is allowed on its own, so flags that
+    take an attached value (`-n5`, `-U3`, `-L1,2`, `-Sfoo`) are left whole.
+    """
+    out = []
+    for token in args:
+        if (isinstance(token, str) and re.fullmatch(r'-[a-zA-Z]{2,8}', token)
+                and not git_flag_allowed(subcommand, token)):
+            parts = [f'-{c}' for c in token[1:]]
+            if all(git_flag_allowed(subcommand, p) for p in parts):
+                out.extend(parts)
+                continue
+        out.append(token)
+    return out
+
+
+def split_git_object_spec(token):
+    """Parse `<rev>:<path>` for `git show`. Returns (rev, path) or None if the token is not one."""
+    if not isinstance(token, str) or token.startswith('-') or ':' not in token:
+        return None
+    rev, _, path = token.partition(':')
+    if not rev or not re.fullmatch(r'[a-zA-Z0-9_./~^-]{1,200}', rev) or rev.startswith('-'):
+        raise ValueError(f"invalid revision in '<rev>:<path>': {token}")
+    if not path or ':' in path or '\\' in path:
+        raise ValueError(f"invalid path in '<rev>:<path>': {token}")
+    return rev, path
+
+
 def validate_git_arg(subcommand, token):
     if not isinstance(token, str) or not token or len(token) > 256 or any(ord(c) < 32 or ord(c) == 127 for c in token):
         raise ValueError('invalid git argument')
     if token.startswith('-'):
-        allowed = GIT_SAFE_FLAGS[subcommand]
-        if token in allowed:
+        if git_flag_allowed(subcommand, token):
             return
-        if access_mode() == 'host' and token in GIT_HOST_FLAGS.get(subcommand, ()):
-            return
-        if subcommand in ('log', 'diff', 'show') and re.fullmatch(r'-U\d{1,3}|--unified=\d{1,3}', token):
-            return
-        if subcommand in ('log', 'show') and re.fullmatch(
-            r'--(format|pretty)=(oneline|short|medium|full|fuller|reference|raw|(t?format:)?[a-zA-Z0-9_%.,:/+ -]{1,120})',
-            token,
-        ):
-            return
-        if subcommand == 'log' and (
-            re.fullmatch(r'-n\d{1,3}|-\d{1,3}|--max-count=\d{1,3}', token)
-            or re.fullmatch(r'--(since|until|author|grep)=[a-zA-Z0-9_./:@+ -]{1,120}', token)
-        ):
-            return
-        if subcommand == 'blame' and re.fullmatch(r'-L\d{1,6},\+?\d{1,6}', token):
-            return
-        raise ValueError(f'disallowed git flag for {subcommand}: {token}')
+        raise ValueError(git_flag_error(subcommand, token))
     if subcommand in ('status', 'ls-files'):
         raise ValueError(f'pass file filters in paths, not args, for git {subcommand}')
     # Revision argument for log/diff/show/blame: forbid `:` so `<rev>:<secret-file>` cannot bypass pathspecs!
     if ':' in token or '\\' in token or token.startswith('@') or '..' in token and '/' in token:
         if ':' in token:
-            raise ValueError("object path syntax '<rev>:<path>' is not allowed; pass file paths in 'paths'")
+            raise ValueError(
+                f"'<rev>:<path>' is only accepted by git show (to read a file at a revision); for git {subcommand}, "
+                "pass the revision in args and file filters in 'paths'"
+            )
     if not re.fullmatch(r'[a-zA-Z0-9_./~^-]{1,200}', token):
         raise ValueError(f'invalid git revision token: {token}')
 
@@ -588,6 +661,25 @@ def run_sandboxed_git(root, node_home, patterns):
         raise ValueError('invalid git args list')
     if not isinstance(raw_paths, list) or len(raw_paths) > 32:
         raise ValueError('invalid git paths list')
+
+    raw_args = expand_git_short_flags(subcommand, raw_args)
+    if len(raw_args) > 32:
+        raise ValueError('invalid git args list')
+    # `git show <rev>:<path>` reads a file at a revision. The path gets the same checks as `paths`
+    # below (pathspec excludes do not apply to object names), and the secret-history guard still
+    # blocks show in any repository that ever committed a secret-named file.
+    object_specs = []
+    if subcommand == 'show':
+        rest = []
+        for tok in raw_args:
+            spec = split_git_object_spec(tok) if isinstance(tok, str) and len(tok) <= 256 else None
+            if spec is None:
+                rest.append(tok)
+            else:
+                object_specs.append(spec)
+        raw_args = rest
+        if len(object_specs) > 8:
+            raise ValueError("at most 8 '<rev>:<path>' arguments per git show")
 
     for tok in raw_args:
         validate_git_arg(subcommand, tok)
@@ -637,8 +729,7 @@ def run_sandboxed_git(root, node_home, patterns):
     # Expose top/.git read-only for this single invocation while keeping all other masks intact.
     git_masks = {p: is_dir for p, is_dir in masks.items() if p != git_entry}
 
-    validated_paths = []
-    for p in raw_paths:
+    def checked_path(p, base):
         if not isinstance(p, str) or not p or len(p) > 512 or '\x00' in p:
             raise ValueError('invalid git path filter')
         rel = Path(p)
@@ -646,10 +737,14 @@ def run_sandboxed_git(root, node_home, patterns):
             raise ValueError(f'path must be relative to workspace: {p}')
         if any(is_masked_name(part, patterns) for part in rel.parts):
             raise ValueError(f'protected path is hidden in pi_safe_git: {p}')
-        resolved = (root / rel)
+        resolved = (base / rel)
         if resolved in git_masks or any(anc in git_masks for anc in resolved.parents):
             raise ValueError(f'masked path is hidden in pi_safe_git: {p}')
-        validated_paths.append(f':(literal){rel.as_posix()}')
+        return rel
+
+    validated_paths = [f':(literal){checked_path(p, root).as_posix()}' for p in raw_paths]
+    # Object names resolve from the repository top (`<rev>:<path>`), not from the working folder.
+    object_args = [f'{rev}:{checked_path(path, top).as_posix()}' for rev, path in object_specs]
 
     if subcommand == 'blame' and len(validated_paths) != 1:
         raise ValueError('git blame requires exactly one non-protected file in paths')
@@ -673,6 +768,7 @@ def run_sandboxed_git(root, node_home, patterns):
     if subcommand == 'log' and not any(a.startswith(('-n', '--max-count=')) or re.fullmatch(r'-\d+', a) for a in raw_args):
         cmd_args += ['-n', '50']
     cmd_args += raw_args
+    cmd_args += object_args
 
     exclude_specs = []
     if subcommand != 'blame':
@@ -691,6 +787,30 @@ def run_sandboxed_git(root, node_home, patterns):
         stream.write(b'\0'.join(map(os.fsencode, bwrap_args)) + b'\0')
     os.lseek(fd, 0, os.SEEK_SET)
     os.execv(BWRAP, [BWRAP, '--args', str(fd), '--', *cmd_args])
+
+
+OUTPUT_MOUNT = '/tmp/pi-tool-output'
+
+
+def output_mount_args():
+    """Mount the session's saved tool output (extensions/output-budget.ts) read-only, if there is one.
+
+    Only a private session folder directly inside ~/.cache/pi-protected/tool-output is accepted, so the
+    variable cannot expose any other host path to the sandbox.
+    """
+    raw = os.environ.get('PI_SANDBOX_OUTPUT_DIR')
+    if not raw:
+        return []
+    base = (Path.home() / '.cache' / 'pi-protected' / 'tool-output').resolve()
+    path = Path(raw)
+    if not path.is_absolute() or path.is_symlink() or not path.name.startswith('s-'):
+        raise ValueError('invalid tool output folder')
+    real = path.resolve(strict=True)
+    info = real.lstat()
+    if (real.parent != base or not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid()
+            or info.st_mode & 0o077):
+        raise ValueError('invalid tool output folder')
+    return ['--ro-bind', str(real), OUTPUT_MOUNT]
 
 
 def read_precomputed_masks(root):
@@ -780,6 +900,7 @@ def main():
     args = sandbox_args(root, node_home, patterns,
                         writable=os.environ.get('PI_PROTECTED_WRITE_ROOT') == str(root),
                         masks=precomputed_masks)
+    args += output_mount_args()
     entry = ['/opt/pi-node/bin/node', '/opt/tool-worker.mjs'] if mode == '--tool' else ['/bin/bash', '-c']
     fd = os.memfd_create('pi-sandbox-args', flags=0)
     with os.fdopen(os.dup(fd), 'wb') as stream:

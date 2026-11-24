@@ -372,14 +372,62 @@ try {
     const tool = factory(process.cwd());
     result = await tool.execute(id, params);
   }
-  process.stdout.write(JSON.stringify({ result }));
+  const fullOutput = name === 'bash' ? await bashFullOutput(JSON.stringify(result)) : undefined;
+  process.stdout.write(JSON.stringify({ result, ...(fullOutput ? { fullOutput } : {}) }));
 } catch (error) {
   let message = String(error.message ?? error);
   if (['read', 'ls', 'find', 'grep', 'edit'].includes(name) && /ENOENT|not found|no such file/i.test(message)) {
-    const hint = await nearestPaths(process.cwd(), params?.path).catch(() => '');
+    const hint = outsideWorkspaceHint(process.cwd(), params?.path)
+      || await nearestPaths(process.cwd(), params?.path).catch(() => '');
     if (hint) message += `\n${hint}`;
   }
-  process.stdout.write(JSON.stringify({ error: message }));
+  const fullOutput = name === 'bash' ? await bashFullOutput(message) : undefined;
+  process.stdout.write(JSON.stringify({ error: message, ...(fullOutput ? { fullOutput } : {}) }));
+}
+
+/**
+ * Pi's bash tool keeps the full output of a long command in /tmp/pi-bash-*.log and names it in the
+ * result, but this sandbox's /tmp is discarded when the call ends. Send the contents back so the host
+ * can keep them where later calls can read them.
+ */
+async function bashFullOutput(text) {
+  const match = /\/tmp\/pi-bash-[A-Za-z0-9]{6,64}\.log/.exec(text);
+  if (!match) return undefined;
+  try {
+    const info = await lstat(match[0]);
+    if (!info.isFile() || info.size > 16 * 1024 * 1024) return undefined;
+    return { path: match[0], text: await readFile(match[0], 'utf8') };
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Explain a missing path outside the workspace: the sandbox mounts only part of the machine, so
+ * "not found" there often means "not visible here" rather than "does not exist".
+ */
+function outsideWorkspaceHint(root, rawPath) {
+  if (typeof rawPath !== 'string' || !rawPath.trim()) return '';
+  const wanted = nodePath.resolve(root, rawPath.replace(/^~(?=\/|$)/, process.env.HOME || '~'));
+  const rel = nodePath.relative(root, wanted);
+  if (!rel.startsWith('..') && !nodePath.isAbsolute(rel)) return '';
+  if (wanted === '/tmp/pi-tool-output' || wanted.startsWith('/tmp/pi-tool-output/')) {
+    return 'Saved tool output exists only for the current Pi session: use the exact path given in the shortened result. Files from an earlier session are not available.';
+  }
+  if (wanted === '/tmp' || wanted.startsWith('/tmp/')) {
+    return 'Each sandboxed tool call gets its own empty /tmp, so files written to /tmp by an earlier call no longer exist. '
+      + 'Recreate the file, or keep files that later calls need inside the project folder.';
+  }
+  const home = process.env.HOME || '';
+  if (HOST_ACCESS) {
+    const homeNote = home && /^\/home\/[^/]+/.test(wanted) && !(wanted === home || wanted.startsWith(`${home}/`))
+      ? ` Your home folder is ${home}.` : '';
+    return `This path is outside the project folder (${root}). There the sandbox shows only /usr, a private /tmp and `
+      + 'a read-only allowlist of home paths (tool runtimes, ~/.gitconfig, agent session logs); if the path exists, '
+      + `it is not visible to tools.${homeNote}`;
+  }
+  return `This path is outside the project folder (${root}). In strict mode the sandbox shows only the project folder, `
+    + '/usr and a private /tmp; your home folder and other paths are not mounted.';
 }
 
 /** Suggest up to three existing workspace paths for a missing one (same name first, then similar). */
