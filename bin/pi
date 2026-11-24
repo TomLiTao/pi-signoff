@@ -1,0 +1,366 @@
+#!/bin/bash
+# Installed as ~/.local/lib/pi-protected/pi by install.sh.
+set -euo pipefail
+HERE="$(dirname "$(readlink -f "$0")")"
+NODE_HOME="$HOME/.local/share/ubuntu-workstation/node/node-v24.22.2-linux-x64"
+REAL_PI="$NODE_HOME/bin/pi"
+export PATH="$NODE_HOME/bin:$PATH"
+
+# Access mode is decided here, not inherited blindly: only the exact value "host" survives.
+ACCESS_IN="${PI_PROTECTED_ACCESS:-}"
+# A delegated worker accepts data, not passthrough CLI flags. Read-only workers can never enable writes.
+unset PI_PROTECTED_ACCESS PI_PROTECTED_WORKER PI_PROTECTED_WORKTREE_WORKER PI_PROTECTED_WORKER_PLAN PI_PROTECTED_CHECKPOINT_REF PI_PROTECTED_BRAVE_FALLBACK PI_PROTECTED_MWMBL_FALLBACK PI_SANDBOX_MASKS_FD PI_PROTECTED_START_MODE PI_PROTECTED_DELEGATE_BUDGET PI_PROTECTED_GIT PI_PROTECTED_MEMORY PI_PROTECTED_SKILLS PI_SANDBOX_SKILL_MOUNTS PI_PROTECTED_HOOKS PI_PROTECTED_MCP PI_PROTECTED_AUTO_LEVEL PI_PROTECTED_SAVE_SPECS PI_PROTECTED_SPEC_THINKING PI_PROTECTED_STYLE PI_PROTECTED_NOTIFY PI_PROTECTED_CODEMODE PI_PROTECTED_UI PI_PROTECTED_CODE_INTEL
+if [[ ${1:-} == --protected-worker ]]; then
+  if [[ $# != 7 || ! $2 =~ ^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$ || ! $3 =~ ^[a-zA-Z0-9][a-zA-Z0-9._:/-]{0,127}$ || ! $4 =~ ^(off|minimal|low|medium|high|xhigh)$ || ! $5 =~ ^[01]$ || -z $7 ]]; then
+    echo 'pi: invalid protected worker invocation' >&2; exit 2
+  fi
+  worker_tools=()
+  count=0
+  unset PI_PROTECTED_WEB PI_PROTECTED_FETCH PI_PROTECTED_WRITE_ROOT PI_PROTECTED_GIT PI_PROTECTED_EXIT PI_PROTECTED_HOOKS_FILE PI_PROTECTED_MCP_FILE
+  if [[ -n $6 ]]; then
+    IFS=, read -r -a worker_tools <<< "$6"
+    for tool in "${worker_tools[@]}"; do
+      case "$tool" in
+        pi_safe_read|pi_safe_bash|pi_safe_grep|pi_safe_find|pi_safe_ls) ;;
+        pi_safe_git) export PI_PROTECTED_GIT=1 ;;
+        pi_safe_web_search) export PI_PROTECTED_WEB=1 ;;
+        pi_safe_web_fetch) export PI_PROTECTED_FETCH=1 ;;
+        *) echo 'pi: invalid protected worker tool' >&2; exit 2 ;;
+      esac
+      count=$((count + 1))
+    done
+  fi
+  selection=(--no-tools)
+  if (( count )); then
+    # Reconstruct from validated tokens, not the raw argument.
+    selection=(--tools "$(IFS=,; printf '%s' "${worker_tools[*]}")")
+  fi
+  /usr/bin/python3 -I "$HERE/sandbox.py" --check "$(pwd -P)"
+  export PI_PROTECTED_DIR="$HERE" PI_PROTECTED_NODE_HOME="$NODE_HOME"
+  export PI_PROTECTED_WORKER=1 PI_PROTECTED_WORKER_PLAN="$5"
+  [[ $ACCESS_IN == host ]] && export PI_PROTECTED_ACCESS=host
+  # The fixed prefix also prevents any leading @file, slash command, or flag interpretation.
+  exec "$REAL_PI" --offline --no-session --no-approve --no-extensions --no-skills --no-prompt-templates \
+    --no-context-files --no-themes --no-mcp --no-builtin-tools "${selection[@]}" \
+    -e "$HERE/secret-tools.ts" --provider "$2" --model "$3" --thinking "$4" -p -- \
+    $'Read-only delegated task. Use only available tools. Return your findings, with paths when relevant.\n\nTask:\n'"$7"
+fi
+
+if [[ ${1:-} == --protected-worktree-worker ]]; then
+  if [[ $# != 7 || ! $2 =~ ^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$ || ! $3 =~ ^[a-zA-Z0-9][a-zA-Z0-9._:/-]{0,127}$ || ! $4 =~ ^(off|minimal|low|medium|high|xhigh)$ || -z $5 || -z $7 ]]; then
+    echo 'pi: invalid protected worktree worker invocation' >&2; exit 2
+  fi
+  WT_BASE="${PI_PROTECTED_WORKTREES_DIR:-$HOME/.cache/pi-protected/worktrees}"
+  WT_BASE_REAL="$(readlink -f "$WT_BASE" 2>/dev/null || true)"
+  WT_REAL="$(readlink -f "$5" 2>/dev/null || true)"
+  if [[ -z $WT_BASE_REAL || -z $WT_REAL || $WT_REAL != "$WT_BASE_REAL"/* || ! -d $WT_REAL ]]; then
+    echo 'pi: worktree directory must reside inside the isolated worktrees cache' >&2; exit 2
+  fi
+  WT_META="$(stat -c '%u:%a' "$WT_REAL")"
+  if [[ $WT_META != "$(id -u):700" ]]; then
+    echo 'pi: worktree directory must be mode 0700 and owned by the current user' >&2; exit 2
+  fi
+  worker_tools=()
+  count=0
+  unset PI_PROTECTED_WEB PI_PROTECTED_FETCH PI_PROTECTED_GIT PI_PROTECTED_EXIT PI_PROTECTED_HOOKS_FILE PI_PROTECTED_MCP_FILE
+  if [[ -n $6 ]]; then
+    IFS=, read -r -a worker_tools <<< "$6"
+    for tool in "${worker_tools[@]}"; do
+      case "$tool" in
+        pi_safe_read|pi_safe_bash|pi_safe_edit|pi_safe_write|pi_safe_grep|pi_safe_find|pi_safe_ls) ;;
+        pi_safe_git) export PI_PROTECTED_GIT=1 ;;
+        pi_safe_web_search) export PI_PROTECTED_WEB=1 ;;
+        pi_safe_web_fetch) export PI_PROTECTED_FETCH=1 ;;
+        *) echo 'pi: invalid protected worktree worker tool' >&2; exit 2 ;;
+      esac
+      count=$((count + 1))
+    done
+  fi
+  selection=(--no-tools)
+  if (( count )); then
+    selection=(--tools "$(IFS=,; printf '%s' "${worker_tools[*]}")")
+  fi
+  cd "$WT_REAL"
+  /usr/bin/python3 -I "$HERE/sandbox.py" --check "$WT_REAL"
+  export PI_PROTECTED_DIR="$HERE" PI_PROTECTED_NODE_HOME="$NODE_HOME"
+  export PI_PROTECTED_WORKER=1 PI_PROTECTED_WORKTREE_WORKER=1 PI_PROTECTED_WORKER_PLAN=0
+  [[ $ACCESS_IN == host ]] && export PI_PROTECTED_ACCESS=host
+  export PI_PROTECTED_WRITE_ROOT="$WT_REAL"
+  exec "$REAL_PI" --offline --no-session --no-approve --no-extensions --no-skills --no-prompt-templates \
+    --no-context-files --no-themes --no-mcp --no-builtin-tools "${selection[@]}" \
+    -e "$HERE/secret-tools.ts" --provider "$2" --model "$3" --thinking "$4" -p -- \
+    $'Isolated worktree delegated task. Changes apply only inside this temporary worktree for user review. Summarize your changes clearly.\n\nTask:\n'"$7"
+fi
+
+# These are user-invoked management commands, not agent runs.
+case "${1:-}" in
+  auth|--help|-h|--version|-v|--list-models) exec "$REAL_PI" "$@" ;;
+  # Render a saved session as a local HTML page; no model run, nothing leaves the laptop.
+  --export) exec "$REAL_PI" --offline --no-extensions --no-skills --no-themes "$@" ;;
+esac
+# Never allow another tool backend or project resource to be loaded by an agent run.
+if [[ ${1:-} =~ ^(install|remove|uninstall|update|list|config|mcp)$ ]]; then
+  echo "pi: use the upstream CLI directly for package/update/MCP management." >&2
+  exit 2
+fi
+TOOL_ARGS=(--tools pi_safe_read,pi_safe_bash,pi_safe_edit,pi_safe_write,pi_safe_grep,pi_safe_find,pi_safe_ls,pi_safe_job_start,pi_safe_job_status,pi_safe_job_cancel,pi_safe_test)
+WEB=1
+FETCH=1
+GIT_TOOL=1
+MEMORY_MODE=off
+SKILLS=1
+HOOKS=1
+MCP=1
+CODEMODE=0
+CODE_INTEL=1
+BRAVE_FALLBACK=1
+MWMBL_FALLBACK=1
+DELEGATES=4
+ACCESS=host
+PI_ARGS=()
+while (( $# )); do
+  case "$1" in
+    --) PI_ARGS+=("$@"); break ;;
+    --web) WEB=1; shift; continue ;;
+    --no-web) WEB=0; shift; continue ;;
+    --strict) ACCESS=strict; shift; continue ;;
+    --no-code-intel) CODE_INTEL=0; shift; continue ;;
+    --brave-fallback) BRAVE_FALLBACK=1; shift; continue ;;
+    --no-brave-fallback) BRAVE_FALLBACK=0; shift; continue ;;
+    --mwmbl-fallback) MWMBL_FALLBACK=1; shift; continue ;;
+    --no-mwmbl-fallback) MWMBL_FALLBACK=0; shift; continue ;;
+    --fetch) FETCH=1; shift; continue ;;
+    --no-fetch) FETCH=0; shift; continue ;;
+    --git) GIT_TOOL=1; shift; continue ;;
+    --no-git) GIT_TOOL=0; shift; continue ;;
+    --memory) MEMORY_MODE=on; shift; continue ;;
+    --no-memory) MEMORY_MODE=never; shift; continue ;;
+    --skills) SKILLS=1; shift; continue ;;
+    --no-skills) SKILLS=0; shift; continue ;;
+    --hooks) HOOKS=1; shift; continue ;;
+    --no-hooks) HOOKS=0; shift; continue ;;
+    --mcp) MCP=1; shift; continue ;;
+    --no-mcp) MCP=0; shift; continue ;;
+    --codemode) CODEMODE=1; shift; continue ;;
+    --no-codemode) CODEMODE=0; shift; continue ;;
+    --use-spec) PI_ARGS+=(--plan); export PI_PROTECTED_START_MODE=plan; shift; continue ;;
+    --save-specs) export PI_PROTECTED_SAVE_SPECS=1; shift; continue ;;
+    --auto)
+      case "${2:-}" in
+        off|low|medium) export PI_PROTECTED_AUTO_LEVEL="$2"; shift 2; continue ;;
+        *) echo 'pi: --auto expects off, low, or medium (high is capped at medium in protected Pi).' >&2; exit 2 ;;
+      esac ;;
+    --auto=*)
+      val="${1#--auto=}"
+      case "$val" in
+        off|low|medium) export PI_PROTECTED_AUTO_LEVEL="$val"; shift; continue ;;
+        *) echo 'pi: --auto expects off, low, or medium (high is capped at medium in protected Pi).' >&2; exit 2 ;;
+      esac ;;
+    --spec-thinking)
+      case "${2:-}" in
+        off|minimal|low|medium|high|xhigh) export PI_PROTECTED_SPEC_THINKING="$2"; shift 2; continue ;;
+        *) echo 'pi: --spec-thinking expects off, minimal, low, medium, high, or xhigh.' >&2; exit 2 ;;
+      esac ;;
+    --spec-thinking=*)
+      val="${1#--spec-thinking=}"
+      case "$val" in
+        off|minimal|low|medium|high|xhigh) export PI_PROTECTED_SPEC_THINKING="$val"; shift; continue ;;
+        *) echo 'pi: --spec-thinking expects off, minimal, low, medium, high, or xhigh.' >&2; exit 2 ;;
+      esac ;;
+    --style)
+      if [[ ! ${2:-} =~ ^[a-zA-Z0-9][a-zA-Z0-9._-]{0,47}$ ]]; then
+        echo 'pi: --style expects a valid style name.' >&2; exit 2
+      fi
+      export PI_PROTECTED_STYLE="$2"; shift 2; continue ;;
+    --style=*)
+      val="${1#--style=}"
+      if [[ ! $val =~ ^[a-zA-Z0-9][a-zA-Z0-9._-]{0,47}$ ]]; then
+        echo 'pi: --style expects a valid style name.' >&2; exit 2
+      fi
+      export PI_PROTECTED_STYLE="$val"; shift; continue ;;
+    --ui)
+      case "${2:-}" in
+        droid|classic) export PI_PROTECTED_UI="$2"; shift 2; continue ;;
+        *) echo 'pi: --ui expects droid or classic.' >&2; exit 2 ;;
+      esac ;;
+    --ui=*)
+      val="${1#--ui=}"
+      case "$val" in
+        droid|classic) export PI_PROTECTED_UI="$val"; shift; continue ;;
+        *) echo 'pi: --ui expects droid or classic.' >&2; exit 2 ;;
+      esac ;;
+    --notify)
+      case "${2:-}" in
+        off|prompts|all|bell) export PI_PROTECTED_NOTIFY="$2"; shift 2; continue ;;
+        *) echo 'pi: --notify expects off, prompts, or all.' >&2; exit 2 ;;
+      esac ;;
+    --notify=*)
+      val="${1#--notify=}"
+      case "$val" in
+        off|prompts|all|bell) export PI_PROTECTED_NOTIFY="$val"; shift; continue ;;
+        *) echo 'pi: --notify expects off, prompts, or all.' >&2; exit 2 ;;
+      esac ;;
+    --delegates)
+      if [[ ! ${2:-} =~ ^[0-9]+$ ]] || (( $2 > 32 )); then
+        echo 'pi: --delegates expects an integer between 0 and 32.' >&2; exit 2
+      fi
+      DELEGATES="$2"; shift 2; continue ;;
+    --delegates=*)
+      val="${1#--delegates=}"
+      if [[ ! $val =~ ^[0-9]+$ ]] || (( val > 32 )); then
+        echo 'pi: --delegates expects an integer between 0 and 32.' >&2; exit 2
+      fi
+      DELEGATES="$val"; shift; continue ;;
+    --workflow) export PI_PROTECTED_START_MODE=workflow; shift; continue ;;
+    --mode)
+      case "${2:-}" in
+        plan) PI_ARGS+=(--plan); export PI_PROTECTED_START_MODE=plan; shift 2; continue ;;
+        ask-edits|accept-edits|workflow) export PI_PROTECTED_START_MODE="$2"; shift 2; continue ;;
+      esac ;;
+    --mode=plan) PI_ARGS+=(--plan); export PI_PROTECTED_START_MODE=plan; shift; continue ;;
+    --mode=ask-edits|--mode=accept-edits|--mode=workflow) export PI_PROTECTED_START_MODE="${1#--mode=}"; shift; continue ;;
+    --no-tools|-nt) TOOL_ARGS=() ;;
+    -e*|--extension*|--approve|--approve=*|-a|--skill*|--theme*|--prompt-template*|--tools*|-t|-t?*|--export=*)
+      echo "pi: $1 is unavailable in protected mode." >&2; exit 2 ;;
+  esac
+  PI_ARGS+=("$1")
+  shift
+done
+unset PI_PROTECTED_WEB PI_PROTECTED_FETCH PI_PROTECTED_GIT PI_PROTECTED_MEMORY PI_PROTECTED_SKILLS PI_PROTECTED_HOOKS PI_PROTECTED_MCP PI_PROTECTED_CODEMODE
+export PI_PROTECTED_MEMORY="$MEMORY_MODE"
+if [[ $SKILLS == 1 ]]; then
+  export PI_PROTECTED_SKILLS=1
+fi
+if [[ $HOOKS == 1 ]]; then
+  export PI_PROTECTED_HOOKS=1
+fi
+if [[ $MCP == 1 ]]; then
+  export PI_PROTECTED_MCP=1
+fi
+if [[ $CODEMODE == 1 ]]; then
+  export PI_PROTECTED_CODEMODE=1
+fi
+if [[ ${#TOOL_ARGS[@]} -gt 0 ]]; then
+  TOOL_ARGS[1]+=,pi_safe_todo,pi_safe_plan,pi_safe_ask_user,pi_safe_data
+  if [[ $CODE_INTEL == 1 ]]; then
+    TOOL_ARGS[1]+=,pi_safe_code
+  else
+    export PI_PROTECTED_CODE_INTEL=0
+  fi
+  if [[ $MEMORY_MODE != never ]]; then
+    TOOL_ARGS[1]+=,pi_safe_memory
+  fi
+  export PI_PROTECTED_DELEGATE_BUDGET="$DELEGATES"
+  if (( DELEGATES > 0 )); then
+    TOOL_ARGS[1]+=,pi_safe_delegate
+  fi
+  if [[ $GIT_TOOL == 1 ]]; then
+    export PI_PROTECTED_GIT=1
+    TOOL_ARGS[1]+=,pi_safe_git
+    if [[ $ACCESS == host ]]; then
+      TOOL_ARGS[1]+=,pi_safe_git_remote
+    fi
+  fi
+  if [[ $ACCESS == host ]]; then
+    TOOL_ARGS[1]+=,pi_safe_run_start,pi_safe_run_status,pi_safe_run_cancel,pi_safe_sessions
+  fi
+  if [[ $MCP == 1 || $CODEMODE == 1 ]]; then
+    TOOL_ARGS[1]+=,tool_search
+  fi
+  if [[ $CODEMODE == 1 ]]; then
+    TOOL_ARGS[1]+=,codemode
+  fi
+  if [[ $MCP == 1 ]]; then
+    TOOL_ARGS[1]+=,mcp__*,list_mcp_resources,list_mcp_resource_templates,read_mcp_resource
+  fi
+fi
+if [[ $WEB == 1 && ${#TOOL_ARGS[@]} -gt 0 ]]; then
+  export PI_PROTECTED_WEB=1
+  TOOL_ARGS[1]+=,pi_safe_web_search
+  if [[ $BRAVE_FALLBACK == 1 ]]; then
+    export PI_PROTECTED_BRAVE_FALLBACK=1
+  fi
+  if [[ $MWMBL_FALLBACK == 1 ]]; then
+    export PI_PROTECTED_MWMBL_FALLBACK=1
+    order='DuckDuckGo → Mwmbl'
+    if [[ $BRAVE_FALLBACK == 1 ]]; then order+=' → Brave'; fi
+    printf 'Pi: search order: %s; public queries may go to each listed provider.\n' "$order" >&2
+  elif [[ $BRAVE_FALLBACK == 1 ]]; then
+    printf 'Pi: DuckDuckGo search with Brave fallback enabled; public queries may go to both providers.\n' >&2
+  else
+    printf 'Pi: DuckDuckGo search enabled; search queries leave this laptop.\n' >&2
+  fi
+fi
+if [[ $FETCH == 1 && ${#TOOL_ARGS[@]} -gt 0 ]]; then
+  export PI_PROTECTED_FETCH=1
+  TOOL_ARGS[1]+=,pi_safe_web_fetch
+  printf 'Pi: public page fetching enabled; requested URLs leave this laptop.\n' >&2
+fi
+export PI_PROTECTED_ACCESS="$ACCESS"
+if [[ $ACCESS == host ]]; then
+  printf 'Pi: Claude-like access: shell has network; reads home allowlist and agent session logs; writes project, its Git folder and /tmp. Keys stay hidden. Use pi --strict for the sealed sandbox.\n' >&2
+fi
+WORK="$(pwd -P)"
+/usr/bin/python3 -I "$HERE/sandbox.py" --check "$WORK"
+export PI_PROTECTED_DIR="$HERE" PI_PROTECTED_NODE_HOME="$NODE_HOME"
+unset PI_PROTECTED_WRITE_ROOT
+CHECKPOINT=(/usr/bin/python3 -IB "$HERE/protected-checkpoint.py")
+if REF=$("${CHECKPOINT[@]}" create "$WORK"); then
+  export PI_PROTECTED_WRITE_ROOT="$WORK" PI_PROTECTED_CHECKPOINT_REF="$REF"
+  printf 'Pi: checkpoint %s\n' "$REF" >&2
+  review_on_exit() {
+    local status=$?
+    if [[ ${PI_PROTECTED_EXIT:-keep} == [aA][sS][kK] ]]; then
+      local state
+      state=$("${CHECKPOINT[@]}" has-changes "$WORK" "$REF" 2>/dev/null || echo changed)
+      if [[ $state == clean ]]; then
+        "${CHECKPOINT[@]}" review "$WORK" "$REF" >&2 || printf 'Pi: could not review checkpoint %s.\n' "$REF" >&2
+        return "$status"
+      fi
+      if [[ ! -t 0 ]]; then
+        "${CHECKPOINT[@]}" review "$WORK" "$REF" >&2 || printf 'Pi: could not review checkpoint %s.\n' "$REF" >&2
+        printf 'Pi: non-interactive exit; keeping changes (checkpoint: %s).\n' "$REF" >&2
+        return "$status"
+      fi
+      "${CHECKPOINT[@]}" summary "$WORK" "$REF" >&2 || true
+      while true; do
+        local choice=k
+        read -r -p "[k]eep changes (default) / [r]evert to checkpoint / [d]iff: " choice || choice=k
+        case "${choice:-k}" in
+          d|D)
+            "${CHECKPOINT[@]}" review "$WORK" "$REF" >&2 || true
+            ;;
+          r|R)
+            local confirm=n
+            read -r -p "Revert all checkpointed changes under $WORK to launch checkpoint? [y/N] " confirm || confirm=n
+            if [[ $confirm == [yY] ]]; then
+              local safety_ref
+              if safety_ref=$("${CHECKPOINT[@]}" restore "$WORK" "$REF"); then
+                printf 'Pi: reverted %s to %s (pre-revert safety checkpoint: %s).\n' "$WORK" "$REF" "$safety_ref" >&2
+              else
+                printf 'Pi: could not revert checkpoint %s.\n' "$REF" >&2
+              fi
+              break
+            fi
+            ;;
+          *)
+            printf 'Pi: kept changes (checkpoint: %s).\n' "$REF" >&2
+            break
+            ;;
+        esac
+      done
+      return "$status"
+    fi
+    "${CHECKPOINT[@]}" review "$WORK" "$REF" >&2 || printf 'Pi: could not review checkpoint %s.\n' "$REF" >&2
+    return "$status"
+  }
+  trap review_on_exit EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+else
+  printf 'Pi: workspace is read-only; no checkpoint was created.\n' >&2
+fi
+"$REAL_PI" --no-approve --no-extensions --no-skills --no-prompt-templates --no-context-files \
+  --no-themes --no-mcp --no-builtin-tools \
+  "${TOOL_ARGS[@]}" \
+  -e "$HERE/secret-tools.ts" -e "$HERE/exit-command.ts" "${PI_ARGS[@]}"

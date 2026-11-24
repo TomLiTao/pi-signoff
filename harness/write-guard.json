@@ -1,0 +1,57 @@
+{
+  "_comment": "Policy for PI_MODE=write (config/pi-local/extensions/write-guard.ts). The bwrap sandbox in bin/pi-local is the real boundary; this file decides what runs without asking. Edit freely; it is copied read-only into each session at launch.",
+
+  "allowCommands": [
+    "ls", "cat", "head", "tail", "wc", "grep", "egrep", "fgrep", "rg", "find", "sort", "uniq", "cut", "tr",
+    "diff", "cmp", "file", "stat", "pwd", "echo", "printf", "true", "false", "test", "[", "which", "type",
+    "tree", "du", "df", "basename", "dirname", "realpath", "readlink", "date", "sed", "jq", "column", "nl",
+    "md5sum", "sha256sum", "xxd", "hexdump", "less", "more", "mkdir", "touch", "sleep", "read",
+
+    "git status", "git diff", "git log", "git show", "git blame", "git ls-files", "git grep", "git rev-parse",
+    "git describe", "git shortlog", "git branch",
+
+    "python3", "python", ".venv/bin/python", "pytest", "python -m pytest", "python3 -m pytest", "python -m unittest", "python3 -m unittest",
+    "python3 -m py_compile", "python -m py_compile", "python3 -m mypy", "mypy", "ruff check", "ruff format",
+    "uv run pytest", ".venv/bin/pytest", ".venv/bin/python -m pytest",
+    "npm test", "npm run test", "npm run lint", "npm run build", "npm run typecheck", "npx tsc", "tsc",
+    "node --test", "npx vitest run", "npx jest",
+    "make test", "make check", "make lint", "make build",
+    "cargo test", "cargo check", "cargo build", "cargo clippy", "cargo fmt",
+    "go test", "go vet", "go build", "gofmt"
+  ],
+
+  "_blockedCommandsNote": "Rules with strictOnly apply only under pi --strict. In the default host access mode those commands are allowed after the usual approval prompt instead of being refused.",
+
+  "blockedCommands": [
+    { "match": "^(sudo|su|doas|pkexec)$", "reason": "privilege escalation is not available in write mode" },
+    { "strictOnly": true, "match": "^(chmod|chown|chgrp|chattr|setfacl)$", "reason": "permission changes are blocked in write mode" },
+    { "match": "^(dd|mkfs.*|shred|wipefs|mount|umount|fdisk|parted|reboot|shutdown|poweroff)$", "reason": "disk and system commands are blocked in write mode" },
+    { "strictOnly": true, "match": "^(curl|wget|ssh|scp|sftp|rsync|nc|ncat|netcat|telnet|ftp|socat)$", "reason": "write mode has no network access" },
+    { "strictOnly": true, "match": "^git (push|pull|fetch|clone|remote|submodule)( |$)", "reason": "write mode has no network access" },
+    { "strictOnly": true, "match": "^git (commit|checkout|switch|restore|reset|clean|stash|rebase|merge|cherry-pick|revert|tag|am|update-ref|gc|prune|config|worktree|notes|filter-branch|replace)( |$)", "reason": ".git is read-only in write mode; the user reviews the diff and commits after the session" },
+    { "strictOnly": true, "match": "^git branch .*(-[dDmMcC]|--delete|--move|--copy|--force)( |$)", "reason": ".git is read-only in write mode" },
+    { "strictOnly": true, "match": "^(pip|pip3) (install|download|uninstall)( |$)", "reason": "write mode has no network access; ask the user to install dependencies" },
+    { "strictOnly": true, "match": "^python3? -m pip (install|download|uninstall)( |$)", "reason": "write mode has no network access; ask the user to install dependencies" },
+    { "strictOnly": true, "match": "^(npm|pnpm|yarn|bun) (i|install|ci|add|remove|uninstall|update|upgrade)( |$)", "reason": "write mode has no network access; ask the user to install dependencies" },
+    { "strictOnly": true, "match": "^uv (add|remove|sync|lock|pip install|tool install)( |$)", "reason": "write mode has no network access; ask the user to install dependencies" },
+    { "match": "^(cargo install|go install|go get|apt|apt-get|snap|flatpak|brew)( |$)", "reason": "installing software is blocked in write mode" }
+  ],
+
+  "_neverAutoScripts": "Scripts whose file name (or path, if the glob has a /) matches ask every time, even with Auto (Medium), saved rules, or plan grants. Add per-project patterns with /permissions never-auto add <glob>.",
+  "neverAutoScripts": ["*broker*", "ibkr*", "deploy*"],
+
+  "neverSessionAllow": ["bash", "sh", "zsh", "dash", "env", "xargs", "eval", "exec", "rm", "mv", "cp", "kill", "pkill", "killall", "awk", "perl", "ruby"],
+
+  "deniedPaths": [".git", ".git/**"],
+
+  "secretExceptions": ["secrets.py", "secrets.pyi", "cacert.pem", "*.example", "*.sample"],
+
+  "secretPaths": [".env", ".env.*", "*.pem", "*.key", "*.key.*", "*.p12", "*.pfx", "id_rsa*", "id_ed25519*", "id_ecdsa*", ".netrc", ".pgpass", ".npmrc", ".pypirc", "credentials.json", "secrets.*", "client_secret*.json", "token.json", "*.keystore", "*.jks"],
+
+  "askPaths": [
+    ".pi/**", ".agents/**", ".factory/**", ".github/**", ".gitlab-ci.yml", ".gitignore", ".gitattributes", ".gitmodules", ".githooks/**", ".husky/**",
+    ".vscode/**", ".idea/**", ".envrc", ".pre-commit-config.yaml",
+    "AGENTS.md", "AGENTS.override.md", "CLAUDE.md",
+    "package-lock.json", "yarn.lock", "pnpm-lock.yaml", "poetry.lock", "uv.lock", "Cargo.lock", "go.sum", "Gemfile.lock", "composer.lock"
+  ]
+}
