@@ -21,7 +21,6 @@ checkpoints before each turn's first change. The terminal experience is modelled
 - [The plan gate](#the-plan-gate)
 - [How it differs from stock Pi](#how-it-differs-from-stock-pi)
 - [Install](#install)
-- [Will it behave like the author's setup?](#will-it-behave-like-the-authors-setup)
 - [Tests](#tests) · [Layout](#layout) · [Acknowledgements](#acknowledgements) · [Licence](#licence)
 
 ## The plan gate
@@ -142,20 +141,6 @@ The command is `pi-signoff`, so the stock `pi` keeps working. To use pi-signoff 
 Internally the harness keeps its original name, Protected Pi: files live under `~/.local/lib/pi-protected`,
 `~/.config/pi-protected` and `~/.local/state/pi-protected`, settings use `PI_PROTECTED_*` variables, and
 checkpoints go to `refs/pi-protected-checkpoints/`.
-
-## Will it behave like the author's setup?
-
-The code is the same. Everything that depends on personal configuration is outside the repository and starts
-empty:
-
-| Item | Where it lives | Fresh install |
-|---|---|---|
-| Default model, idle timeout, telemetry off | `~/.pi/agent/settings.json` | Copied from `config/pi-settings.json` (OpenAI Codex, `gpt-6.2-sol`) if absent. Edit it for your provider. |
-| Provider sign-in | `~/.pi/agent/auth.json` | Run `/login` |
-| Saved shell rules, trusted instructions | `~/.local/lib/pi-protected/` | Empty; built up as you approve |
-| Per-folder default mode and autonomy | `~/.local/state/pi-protected/project-defaults/` | Stock defaults: accept-edits, Auto Off |
-| Skills, droids, hooks, MCP servers, output style | `~/.config/pi-protected/` (skills also `~/.codex/skills/`) | None |
-| Brave Search fallback key | `~/.config/pi-protected/brave-search.key` | None; DuckDuckGo and Mwmbl still work |
 
 ## Tests
 
