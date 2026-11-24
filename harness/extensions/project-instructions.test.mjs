@@ -35,32 +35,38 @@ test('only reviewed instructions from the launch directory load; changes or revo
     process.chdir(cwd);
     writeFileSync(file, text);
     register();
-    assert.equal(section(), undefined);
+    const untrusted = /has not been approved by the user, so its text is not included/;
+    // Untrusted: the text is withheld, but the model is told the file exists.
+    assert.match(section(), untrusted);
+    assert.ok(!section().includes('Run the suite'));
     confirm = false;
     await command('trust');
-    assert.equal(section(), undefined);
+    assert.match(section(), untrusted);
     confirm = true;
     review = value => value + 'modified in preview';
     await command('trust');
-    assert.equal(section(), undefined);
+    assert.match(section(), untrusted);
     review = value => value.trim(); // The interactive editor trims on submit.
     await command('trust');
     assert.ok(section().endsWith(text));
     register();
     assert.ok(section().endsWith(text));
     assert.equal(section(parent), undefined);
+    // Changed after approval: the last approved text loads, labelled; the unreviewed edit does not.
     writeFileSync(file, text + 'New rule.\n');
-    assert.equal(section(), undefined);
+    assert.match(section(), /^The last user-approved version of AGENTS\.md/);
+    assert.ok(section().endsWith(text));
+    assert.ok(!section().includes('New rule.'));
     await command('trust');
     assert.ok(section().includes('New rule.'));
     await command('revoke');
-    assert.equal(section(), undefined);
+    assert.match(section(), untrusted);
     const other = path.join(parent, 'other.md');
     writeFileSync(other, text);
     rmSync(file);
     symlinkSync(other, file);
     await command('trust');
-    assert.equal(section(), undefined);
+    assert.ok(!section()?.includes('Run the suite'));
   } finally {
     process.chdir(old);
     rmSync(parent, { recursive: true, force: true });
@@ -105,7 +111,7 @@ test('CLAUDE.md fallback and hash-pinned nested AGENTS.md inject once on subtree
     // Untrusted initially
     const startEvt1 = { systemPromptOptions: { sections: {} } };
     hooks.get('before_agent_start')(startEvt1, ctx);
-    assert.equal(startEvt1.systemPromptOptions.sections.project_instructions, undefined);
+    assert.match(startEvt1.systemPromptOptions.sections.project_instructions, /has CLAUDE\.md, but it has not been approved/);
 
     // Trust all (CLAUDE.md + packages/api/AGENTS.md)
     await commands.get('instructions').handler('trust', ctx);

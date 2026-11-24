@@ -405,7 +405,8 @@ export function workingMessage(elapsedMs: number, runningTools: readonly string[
 }
 
 export interface TurnChanges {
-  files: ReadonlyArray<{ path: string; added: number; removed: number; binary?: boolean }>;
+  /** `unattributed`: changed during the turn, but not by this session's edit/write tools (a shell command or another process). */
+  files: ReadonlyArray<{ path: string; added: number; removed: number; binary?: boolean; unattributed?: boolean }>;
   total: number;
 }
 
@@ -416,8 +417,11 @@ export function formatTurnChanges(changes: TurnChanges, limit = 5): { headline: 
   const n = changes.total;
   const headline = `Changed ${n} file${n === 1 ? '' : 's'} (+${added} −${removed})`;
   const sorted = [...changes.files].sort((a, b) => (b.added + b.removed) - (a.added + a.removed) || a.path.localeCompare(b.path));
-  const rows = sorted.slice(0, limit).map(f => `${oneLine(f.path, 70)}  ${f.binary ? 'binary' : `+${f.added} −${f.removed}`}`);
-  return { headline, rows, more: Math.max(0, n - rows.length) };
+  const rows = sorted.slice(0, limit).map(f =>
+    `${oneLine(f.path, 70)}  ${f.binary ? 'binary' : `+${f.added} −${f.removed}`}${f.unattributed ? '  (shell or another process)' : ''}`);
+  const others = changes.files.filter(f => f.unattributed).length;
+  if (others) rows.push(`${others} of these changed outside Pi's edit/write tools: by a shell command or by another program or agent. /rewind would undo them too.`);
+  return { headline, rows, more: Math.max(0, n - sorted.slice(0, limit).length) };
 }
 
 // Pi's system theme gives user messages a blue-violet panel, extension notes (plan steps, skills,

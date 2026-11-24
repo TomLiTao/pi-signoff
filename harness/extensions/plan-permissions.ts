@@ -605,9 +605,15 @@ function formatApprovalDialogBody(
   summary?: string,
   canPersistShell = false,
   workflowMode = false,
+  notices: readonly string[] = [],
 ): string {
   const lines: string[] = [];
   lines.push(`Review plan & permissions in ${visible(cwd)}:`);
+  if (notices.length > 0) {
+    lines.push('Check before approving:');
+    for (const note of notices.slice(0, 8)) lines.push(`  ${note.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, '?').slice(0, 300)}`);
+    lines.push('');
+  }
   if (summary?.trim()) {
     const cleanSummary = summary.replace(/[\r\n\x00-\x1f\x7f-\x9f]+/g, ' ').trim().slice(0, 200);
     lines.push(`Goal: ${cleanSummary}`);
@@ -712,6 +718,8 @@ export interface PlanPermissionsManagerOptions {
   onRejectedChange?: (ctx?: ExtensionContext) => void;
   onResumeAfterApproval?: () => void;
   onAudit?: (event: AuditEvent) => void;
+  /** Lines shown first in the review: where the planned files go and anything unusual about it. */
+  getReviewNotices?: (cwd: string, files: readonly string[]) => string[];
 }
 
 export type ShellPlanAllowRule =
@@ -961,7 +969,13 @@ export function registerPlanPermissions(
     if (fromPlanMode) choices.push(stayLabel);
     choices.push(reviseLabel, rejectLabel);
 
-    const promptBody = formatApprovalDialogBody(ctx.cwd, steps, classified, summary, hasShellToPersist, workflowMode);
+    let notices: string[] = [];
+    try {
+      notices = options.getReviewNotices?.(ctx.cwd, requested?.files ?? []) ?? [];
+    } catch {
+      notices = [];
+    }
+    const promptBody = formatApprovalDialogBody(ctx.cwd, steps, classified, summary, hasShellToPersist, workflowMode, notices);
     // No timeout: the review stays open until the user approves, revises or rejects. Dismissing it
     // (Esc) shows it again, so an unanswered review is never reported as a rejection.
     let choice: string | undefined;
@@ -1123,7 +1137,8 @@ export function registerPlanPermissions(
       ...outcome.classified.shellCommands,
       ...outcome.classified.alreadyAllowed,
     ].some(s => /(?:^|\s)git\s+(status|diff|log|show|blame|ls-files|rev-parse|branch)\b/.test(s) && !s.includes('--no-index'));
-    if (hasRepoGitShell) {
+    // Only the strict sandbox masks .git; in host access mode the shell runs git normally.
+    if (hasRepoGitShell && process.env.PI_PROTECTED_ACCESS !== 'host') {
       lines.push('- Note: .git is masked as empty inside pi_safe_bash; use the pi_safe_git tool (e.g. diff with args: ["--check"], log with args: ["--format=%h %aI %s"]) for Git repository inspection.');
     }
     if (outcome.classified.rejected.length > 0) {
@@ -1799,7 +1814,9 @@ export function registerPlanPermissions(
       `To run a workspace Python script with varying arguments (backtests, data pulls, reports), request it in permissions.scripts (e.g. "python3 scripts/backtest.py" or "python3 -m scripts.daily_memo"): the grant covers any arguments while the script and the local modules it imports stay unchanged, so finish editing a script before requesting it.`,
       `Scripts matching the user's never-auto patterns (broker, live trading, deploy, …) cannot be granted upfront: the user approves each run when it happens, so do not list them in permissions.`,
       `Do not request commands or edits the current autonomy level already allows (the autonomy section of this prompt lists them); they run without a grant once the plan is approved.`,
-      `Inside pi_safe_bash, .git is masked as empty; use pi_safe_git (status, diff, log, show, blame, ls-files) for Git repository inspection instead of requesting git shell commands.`,
+      ...(process.env.PI_PROTECTED_ACCESS === 'host'
+        ? []
+        : [`Inside pi_safe_bash, .git is masked as empty; use pi_safe_git (status, diff, log, show, blame, ls-files) for Git repository inspection instead of requesting git shell commands.`]),
       `Skip ${planToolName} for simple questions and read-only lookups (and in accept-edits mode, straightforward single-step edits that require no extra permissions).`,
     ],
     description:

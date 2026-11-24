@@ -18,3 +18,43 @@ export function withImagesForModel<T>(result: T, ctx: { model?: { id?: string; i
   } as T;
 }
 
+
+type Msg = { role?: string; content?: unknown; toolCallId?: string; toolName?: string; [key: string]: unknown };
+
+/**
+ * Replace images in tool results older than the last `keepUserTurns` user prompts with a one-line note.
+ * A rendered figure is checked once, right after it is made; keeping every image in context until the
+ * next compaction made them most of a long session's input. The cut-off only moves forward when the
+ * user sends a prompt, so the cached prompt prefix changes at most once per prompt. The session file
+ * keeps the images; only what is sent to the model changes. Returns undefined when nothing changes.
+ */
+export function stubOldImages<T extends Msg>(messages: readonly T[], keepUserTurns = 2): T[] | undefined {
+  let seen = 0;
+  let cut = -1;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i]?.role === 'user' && ++seen === keepUserTurns) {
+      cut = i;
+      break;
+    }
+  }
+  if (cut <= 0) return undefined;
+  const pathsById = new Map<string, string>();
+  for (let i = 0; i < cut; i++) {
+    const m = messages[i];
+    if (m?.role !== 'assistant' || !Array.isArray(m.content)) continue;
+    for (const block of m.content as Array<{ type?: string; id?: string; arguments?: { path?: unknown } }>) {
+      if (block?.type === 'toolCall' && block.id && typeof block.arguments?.path === 'string') pathsById.set(block.id, block.arguments.path);
+    }
+  }
+  let changed = false;
+  const out = messages.map((m, i) => {
+    if (i >= cut || m?.role !== 'toolResult' || !Array.isArray(m.content)) return m;
+    const blocks = m.content as Array<{ type: string; [key: string]: unknown }>;
+    if (!blocks.some(b => b?.type === 'image')) return m;
+    changed = true;
+    const file = m.toolCallId ? pathsById.get(m.toolCallId) : undefined;
+    const note = `[Image removed from older context${file ? `: ${file}` : ''}. Read the file again if you need to look at it.]`;
+    return { ...m, content: [...blocks.filter(b => b?.type !== 'image'), { type: 'text', text: note }] };
+  });
+  return changed ? out : undefined;
+}

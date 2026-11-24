@@ -1,16 +1,18 @@
 import { execFileSync, spawn } from 'node:child_process';
+import { realpathSync } from 'node:fs';
+import path from 'node:path';
 import type { Writable } from 'node:stream';
 import type { BashOperations, ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { Type } from 'typebox';
-import { askApproval, checkShellDeny, editDecision, loadEditPolicy, shellNeedsApproval, suggestShellPrefix } from './approvals.ts';
+import { askApproval, checkShellDeny, lastApprovalMiss, shellNotApprovedMessage, editDecision, loadEditPolicy, shellNeedsApproval, suggestShellPrefix } from './approvals.ts';
 import { askUserToolName, registerAskUser } from './ask-user.ts';
 import { createAuditLogger } from './audit.ts';
 import { parseAutonomyLevel, parseSpecThinkingLevel, registerAutonomy, type AutonomyHandle } from './autonomy.ts';
-import { registerCheckpoints } from './checkpoints.ts';
+import { registerCheckpoints, type TurnChangeSummary } from './checkpoints.ts';
 import { describeDefaults, isNeverAutoGlob, projectDefaultsStore, type ProjectDefaults } from './project-defaults.ts';
 import { neverAutoMatch, parseScriptCommand, scriptFingerprint } from './script-grants.ts';
 import { createEgressGuard } from './egress-guard.ts';
-import { IMAGE_READ_GUIDELINE, withImagesForModel } from './read-images.ts';
+import { IMAGE_READ_GUIDELINE, stubOldImages, withImagesForModel } from './read-images.ts';
 import { bashOutcome, formatRunDetail, formatRunLine, leadingCommand, outputTail, runLogStore, type RunRecord } from './run-log.ts';
 import { registerCodeIntel } from './code-intel.ts';
 import { registerDataTool } from './data-tool.ts';
@@ -28,6 +30,7 @@ import { registerMcpBridges, type McpBridgesHandle } from './mcp-bridge.ts';
 import { memoryToolName, registerMemory, type MemoryHandle } from './memory.ts';
 import { keepToolOrderStable } from './tool-order.ts';
 import { registerSessionIdentity } from './session-identity.ts';
+import { registerWorktreeGuard } from './worktree-guard.ts';
 import { planToolName, registerPlanPermissions, type PlanPermissionsHandle } from './plan-permissions.ts';
 import { parseNotifyMode, registerPreferences, type PreferencesHandle } from './preferences.ts';
 import { adaptCorePromptGuidelines, registerProjectInstructions, type InstructionsHandle } from './project-instructions.ts';
@@ -146,6 +149,20 @@ export default async function (pi: ExtensionAPI) {
   // Before any extension changes the active tools: a stable order keeps the system prompt cacheable.
   keepToolOrderStable(pi);
   registerSessionIdentity(pi);
+  // Registered before the permission gate so its block (lost task worktree) wins over approval prompts.
+  let worktreeGuard: ReturnType<typeof registerWorktreeGuard> | undefined;
+  if (!worker) {
+    try {
+      worktreeGuard = registerWorktreeGuard(pi, { launch: realpathSync(process.cwd()), toolPrefix });
+    } catch (error) {
+      console.error('Pi: could not initialize the worktree guard:', error);
+    }
+  }
+  // Images read in earlier prompts leave the model's context (the session file keeps them).
+  pi.on('context', event => {
+    const messages = stubOldImages(event.messages as Array<{ role?: string; content?: unknown }>);
+    return messages ? { messages: messages as typeof event.messages } : undefined;
+  });
   if (!worker && process.env.PI_PROTECTED_TIMING === '1') registerTiming(pi);
   const webEnabled = process.env.PI_PROTECTED_WEB === '1';
   const fetchEnabled = process.env.PI_PROTECTED_FETCH === '1';
@@ -333,8 +350,9 @@ export default async function (pi: ExtensionAPI) {
       const approved = await askApproval(ctx, background ? 'Run background shell command' : 'Run shell command', command,
         undefined, undefined, undefined, `⚠ ${why}.`);
       if (!approved) {
-        fail(`Shell command not approved (${why}). Do not retry without the user's approval.`,
-          ctx.hasUI ? 'user-denied' : 'no-ui-block', Boolean(ctx.hasUI && !ctx.signal?.aborted));
+        const miss = lastApprovalMiss();
+        fail(shellNotApprovedMessage(miss, why),
+          miss === 'timeout' ? 'approval-timeout' : ctx.hasUI ? 'user-denied' : 'no-ui-block', Boolean(ctx.hasUI && !ctx.signal?.aborted));
       }
       return { rule: 'never-auto-approved-once', prompted: true };
     }
@@ -446,9 +464,11 @@ export default async function (pi: ExtensionAPI) {
       }
     }
     if (!await askApproval(ctx, background ? 'Run background shell command' : 'Run shell command', command, remember, rememberPrefix, rememberScript)) {
-      const err = new Error('Shell command not approved. Do not retry without user approval.') as Error & { prompted?: boolean; auditRule?: string };
+      const miss = lastApprovalMiss();
+      const err = new Error(shellNotApprovedMessage(miss)) as Error & { prompted?: boolean; auditRule?: string; exposeMessage?: boolean };
       err.prompted = Boolean(ctx.hasUI && !ctx.signal?.aborted);
-      err.auditRule = ctx.hasUI ? 'user-denied' : 'no-ui-block';
+      err.auditRule = miss === 'timeout' ? 'approval-timeout' : ctx.hasUI ? 'user-denied' : 'no-ui-block';
+      err.exposeMessage = true;
       throw err;
     }
     return {
@@ -660,6 +680,7 @@ export default async function (pi: ExtensionAPI) {
         dir,
         launchRef: process.env.PI_PROTECTED_CHECKPOINT_REF,
         writeRoot: process.env.PI_PROTECTED_WRITE_ROOT,
+        extraRoots: () => worktreeGuard?.activeRoots() ?? [],
         isPlanning: () => planning,
         hasPendingWork: () => gate.pendingCount() > 0 || jobsRef?.hasActiveJobs() === true,
         onCheckpointChange: ref => {
@@ -817,7 +838,10 @@ export default async function (pi: ExtensionAPI) {
         setAutonomyLevel: (level, ctx) => { autonomyHandle?.setLevel(level, ctx, false); },
         onPlanApproved: ({ summary, steps, outcome, ctx }) => {
           autonomyHandle?.recordApprovedSpec({ cwd: ctx.cwd, summary, steps, classified: outcome.classified, ctx });
+          // The review showed any lost task worktree, so approving it is the user's decision.
+          worktreeGuard?.acknowledgeRemoval();
         },
+        getReviewNotices: (cwd, files) => worktreeGuard?.reviewNotices(cwd, files) ?? [],
         onRejectedChange: ctx => refreshStatus(ctx ?? latestCtx),
         onResumeAfterApproval: () => {
           pi.sendUserMessage('Approved the selected rejected execution permission(s); please continue.');
@@ -1553,8 +1577,27 @@ export default async function (pi: ExtensionAPI) {
     pi.on('agent_end', async (_event, ctx) => {
       const ref = checkpoints?.getTurnRef();
       if (!ref || !checkpoints || planning || process.env.PI_PROTECTED_WRITE_ROOT !== ctx.cwd) return;
-      const summary = await checkpoints.changesSince(ref);
-      if (!summary || summary.total === 0) return;
+      const launchSummary = await checkpoints.changesSince(ref);
+      if (!launchSummary) return;
+      // Task worktrees are separate checkouts, so their changes are counted from their own checkpoints.
+      const launchReal = realpathSync(ctx.cwd);
+      const files: Array<TurnChangeSummary['files'][number] & { unattributed?: boolean }> = [...launchSummary.files];
+      let total = launchSummary.total;
+      for (const { root, ref: rootRef } of checkpoints.getTurnRoots()) {
+        const part = await checkpoints.changesSince(rootRef, root);
+        if (!part) continue;
+        const prefix = path.relative(launchReal, root);
+        files.push(...part.files.map(f => ({ ...f, path: path.join(prefix, f.path) })));
+        total += part.total;
+      }
+      if (total === 0) return;
+      // Files this session's edit/write tools did not touch were changed by a shell command or by
+      // something outside the session (another agent in the same checkout).
+      const written = worktreeGuard?.turnWrites();
+      const summary = {
+        files: written ? files.map(f => (written.has(path.resolve(launchReal, f.path)) ? f : { ...f, unattributed: true })) : files,
+        total,
+      };
       try {
         pi.appendEntry('pi-turn-changes', { ref, mode: writeSubMode, ...summary });
       } catch {
@@ -1964,6 +2007,7 @@ export default async function (pi: ExtensionAPI) {
           maskCache.invalidate();
           refreshStatus();
         },
+        onRemoved: removed => worktreeGuard?.forget(removed),
       });
     } catch (error) {
       console.error('Pi: could not initialize /worktree:', error);

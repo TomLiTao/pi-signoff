@@ -443,6 +443,30 @@ export interface PrefixRememberOption {
   save: () => void;
 }
 
+export const APPROVAL_TIMEOUT_MS = 60_000;
+
+/**
+ * Why the last askApproval call returned false. A prompt that times out is not a refusal: the model
+ * must be told so, or it reports that the user rejected something they never answered.
+ */
+export type ApprovalMiss = 'denied' | 'timeout' | 'no-ui' | 'aborted' | 'too-long';
+let lastMiss: ApprovalMiss = 'denied';
+export function lastApprovalMiss(): ApprovalMiss {
+  return lastMiss;
+}
+
+/** The message for a refused or unanswered shell approval; `detail` goes in brackets. */
+export function shellNotApprovedMessage(miss: ApprovalMiss, detail?: string): string {
+  const extra = detail ? ` (${detail})` : '';
+  if (miss === 'timeout') {
+    return `Shell command not run: the approval prompt got no answer within ${APPROVAL_TIMEOUT_MS / 1000} s${extra}. The user did not refuse it. Do not report it as rejected; continue without it or ask the user whether to run it.`;
+  }
+  if (miss === 'too-long') {
+    return `Shell command not run: it is too long to show in full for approval${extra}. Split it into shorter, independent commands.`;
+  }
+  return `Shell command not approved${extra}. Do not retry without user approval.`;
+}
+
 export async function askApproval(
   ctx: ExtensionContext,
   action: string,
@@ -452,10 +476,15 @@ export async function askApproval(
   rememberScript?: ScriptRememberOption,
   warning?: string,
 ) {
-  if (!ctx.hasUI || ctx.signal?.aborted) return false;
+  lastMiss = 'denied';
+  if (!ctx.hasUI || ctx.signal?.aborted) {
+    lastMiss = ctx.hasUI ? 'aborted' : 'no-ui';
+    return false;
+  }
   const display = visible(value);
   if (display.length > 1200) {
     // Avoid approving partially displayed input. Request shorter, independent calls instead.
+    lastMiss = 'too-long';
     return false;
   }
   const always = 'Always allow this command for this project';
@@ -479,9 +508,14 @@ export async function askApproval(
   }
   const manage = remember || rememberPrefix || rememberScript ? ' Manage with /permissions.' : '';
   const note = notes.length ? `\n${notes.join('\n')}${manage}` : '';
+  const shownAt = Date.now();
   const choice = await ctx.ui.select(`${action} in ${visible(ctx.cwd)}?\n${display}${note}`, options,
-    { timeout: 60_000, signal: ctx.signal });
-  if (ctx.signal?.aborted) return false;
+    { timeout: APPROVAL_TIMEOUT_MS, signal: ctx.signal });
+  if (ctx.signal?.aborted) {
+    lastMiss = 'aborted';
+    return false;
+  }
+  if (choice === undefined && Date.now() - shownAt >= APPROVAL_TIMEOUT_MS - 1_000) lastMiss = 'timeout';
   if (scriptLabel && choice === scriptLabel && rememberScript) {
     rememberScript.save();
     return true;

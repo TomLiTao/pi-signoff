@@ -431,6 +431,23 @@ export function registerDoctor(pi: ExtensionAPI, options: DoctorOptions) {
   const launch = realpathSync(process.cwd());
   let startupId: string | undefined;
   try { startupId = readManifest(options.dir).id; } catch { /* Older or incomplete install. */ }
+  // Record which install a session ran on, so a log that spans a reinstall can be read correctly,
+  // and tell the user once when the harness was reinstalled under a running session.
+  let warnedReinstall = false;
+  pi.on('session_start', async () => {
+    if (!startupId) return;
+    try {
+      pi.appendEntry('pi-harness-install', { id: startupId, at: new Date().toISOString() });
+    } catch { /* No active session file. */ }
+  });
+  pi.on('before_agent_start', async (_event, ctx) => {
+    if (warnedReinstall || !startupId || !ctx.hasUI) return;
+    let current: string | undefined;
+    try { current = readManifest(options.dir).id; } catch { return; }
+    if (current === startupId) return;
+    warnedReinstall = true;
+    ctx.ui.notify('The Pi harness was reinstalled after this session started. This session still runs the old code; restart Pi to load the new version.', 'warning');
+  });
   pi.registerCommand('doctor', {
     description: 'Check the protected Pi installation and current session (local only)',
     async handler(raw, ctx) {

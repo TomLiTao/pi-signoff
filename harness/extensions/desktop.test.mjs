@@ -29,7 +29,7 @@ function harness() {
   const ctx = { cwd: process.cwd(), mode: 'tui', hasUI: true, ui: { notify: text => notes.push(text) },
     sessionManager: { getBranch: () => [final, toolCall] } };
   return { ctx, commands, notes, pi: { registerCommand: (name, command) => commands.set(name, command.handler),
-    getActiveTools: () => ['pi_safe_read'] } };
+    getActiveTools: () => ['pi_safe_read'], on: () => {}, appendEntry: () => {} } };
 }
 
 function fixture(t) {

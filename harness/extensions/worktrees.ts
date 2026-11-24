@@ -5,6 +5,7 @@ import { execFile } from 'node:child_process';
 import { existsSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 import type { ExtensionAPI, ExtensionCommandContext } from '@earendil-works/pi-coding-agent';
+import { linkedGitdir, lockState, unlockWorktree } from './worktree-guard.ts';
 
 export const WORKTREE_BRANCH_PREFIX = 'pi/';
 const TASK = /^[a-z0-9][a-z0-9._-]{0,62}$/;
@@ -16,6 +17,8 @@ export interface WorktreeOptions {
   /** Detached runs still running with a working folder inside dir. */
   liveRunsUnder?: (dir: string) => string[];
   onChange?: () => void;
+  /** The user removed this worktree with /worktree done (so the session did not lose it unexpectedly). */
+  onRemoved?: (dir: string) => void;
 }
 
 const hostGit: GitRunner = (args, cwd) => new Promise(resolve => {
@@ -80,6 +83,12 @@ export function registerWorktreeCommands(pi: ExtensionAPI, options: WorktreeOpti
     if (dirty) throw new Error(`The worktree has uncommitted or untracked files; commit or remove them first:\n${dirty.split('\n').slice(0, 12).join('\n')}`);
     const live = options.liveRunsUnder?.(realpathSync(dir)) ?? [];
     if (live.length) throw new Error(`Detached runs are still using this worktree: ${live.join(', ')}. Wait for them or cancel them first.`);
+    // A running Pi session that works in this worktree holds Git's worktree lock; removing the folder
+    // under it is what made a session lose its work location. A lock from a dead process is stale.
+    const gitdir = linkedGitdir(dir);
+    const held = gitdir ? lockState(gitdir) : { state: 'none' as const };
+    if (held.state === 'live-pi') throw new Error(`Another running Pi session is working in this worktree. End that session first.\n${held.reason?.trim() ?? ''}`);
+    if (held.state === 'foreign') throw new Error(`The worktree is locked: ${held.reason?.trim() || 'no reason given'}. Unlock it with git worktree unlock if that no longer applies.`);
     const log = await must(['log', '--oneline', `main..${branch}`], top);
     const stat = log ? await must(['diff', '--stat', `main...${branch}`], top) : '';
     const prompt = log
@@ -94,7 +103,10 @@ export function registerWorktreeCommands(pi: ExtensionAPI, options: WorktreeOpti
         throw new Error(`Merge stopped (conflict or error); main is unchanged.\n${(merge.stderr || merge.stdout).trim().slice(0, 600)}`);
       }
     }
+    if (gitdir && (held.state === 'ours' || held.state === 'stale-pi')) unlockWorktree(gitdir, process.pid, true);
+    const removedReal = realpathSync(dir);
     await must(['worktree', 'remove', dir], top);
+    options.onRemoved?.(removedReal);
     await must(['branch', '-d', branch], top);
     options.onChange?.();
     ctx.ui.notify(`${log ? `Merged ${branch} into main; ` : ''}removed ${path.relative(top, dir)} and branch ${branch}. Nothing was pushed.`, 'info');
