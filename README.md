@@ -99,6 +99,15 @@ terminal UX:
 
 ### Other additions
 
+- A task worktree the session works in is locked with Git's own worktree lock, so `git worktree remove`
+  (by any agent) refuses it while the session runs. If it disappears anyway, Pi warns and will not write to
+  the main checkout until you decide. A `<working_state>` prompt section names the checkout, branch and
+  worktrees, and `/rewind` also restores nested task worktrees.
+- The plan review starts with "Check before approving": where the files go (checkout and branch), writes to
+  `main` outside the task worktree, a lost worktree, and edits to `AGENTS.md`.
+- When an approved `AGENTS.md` changes, the last approved text is loaded (labelled as such) until you review
+  the change; the model is told when project instructions are not loaded.
+- Images read before the last two prompts are dropped from the model's context (the session keeps them).
 - Background jobs announce completion themselves, so the model does not poll.
 - Long tool output (shell, jobs, Git, search, listings) is shortened to a per-tool budget, keeping the head and
   tail. The full text is saved for the session under `~/.cache/pi-protected/tool-output/` and mounted
