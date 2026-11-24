@@ -2,7 +2,18 @@
 # Installed as ~/.local/lib/pi-protected/pi by install.sh.
 set -euo pipefail
 HERE="$(dirname "$(readlink -f "$0")")"
+# The Node install (prefix with bin/node and the global @earendil-works/pi-coding-agent) that runs Pi.
+# install.sh records it in node-home next to this launcher; the fallback is the original author's layout.
 NODE_HOME="$HOME/.local/share/ubuntu-workstation/node/node-v24.22.2-linux-x64"
+if [ -f "$HERE/node-home" ]; then
+  recorded=
+  IFS= read -r recorded < "$HERE/node-home" || true
+  if [[ $recorded == /* && -x $recorded/bin/node && -x $recorded/bin/pi ]]; then
+    NODE_HOME=$recorded
+  else
+    echo "pi: ignoring invalid $HERE/node-home; re-run install.sh" >&2
+  fi
+fi
 REAL_PI="$NODE_HOME/bin/pi"
 export PATH="$NODE_HOME/bin:$PATH"
 

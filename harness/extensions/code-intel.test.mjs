@@ -5,8 +5,9 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { countBySeverity, formatDiagnostics, locateColumn, registerCodeIntel } from './code-intel.ts';
+import { testNodeHome } from './_node-home.mjs';
 
-const NODE_HOME = `${process.env.HOME}/.local/share/ubuntu-workstation/node/node-v24.22.2-linux-x64`;
+const NODE_HOME = `${testNodeHome()}`;
 const SERVER = `${NODE_HOME}/lib/node_modules/basedpyright/langserver.index.js`;
 const policy = { secretPaths: ['.env'], deniedPaths: ['.git', '.git/**'], askPaths: [] };
 

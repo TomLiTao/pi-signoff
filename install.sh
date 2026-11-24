@@ -2,11 +2,37 @@
 # Install pi-plan-gate (Protected Pi) into ~/.local/lib/pi-protected and link ~/.local/bin/pi.
 # Safe to re-run. Refuses to replace a real ~/.local/bin/pi that is not a symlink.
 # PI_SKIP_RUNTIMES=1 skips the optional helper runtimes (basedpyright, DuckDB).
+# PI_NODE_HOME=/path/to/node-prefix selects the Node install that holds Pi (default: found automatically).
 set -euo pipefail
 R="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
-# Must match NODE_HOME in bin/pi: the Node install whose global modules hold @earendil-works/pi-coding-agent.
-NODE_HOME="$HOME/.local/share/ubuntu-workstation/node/node-v24.22.2-linux-x64"
 PROTECTED="$HOME/.local/lib/pi-protected"
+PI_AGENT_DIR="${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}"
+PI_PACKAGE=lib/node_modules/@earendil-works/pi-coding-agent
+TESTED_PI=1.6.0
+
+# The Node prefix must hold bin/node and the global Pi package: the sandbox mounts it at /opt/pi-node and
+# runs bin/node from there. Self-contained installs (official tarball, nvm, fnm, volta) all qualify.
+find_node_home() {
+  local candidate root
+  for candidate in "${PI_NODE_HOME:-}" "$HOME/.local/share/ubuntu-workstation/node/node-v24.22.2-linux-x64"; do
+    [ -n "$candidate" ] && [ -x "$candidate/bin/node" ] && [ -d "$candidate/$PI_PACKAGE" ] && { printf '%s\n' "$candidate"; return; }
+  done
+  if command -v npm >/dev/null && root=$(npm root -g 2>/dev/null) && [ -d "$root/@earendil-works/pi-coding-agent" ]; then
+    candidate=$(cd "$root/../.." && pwd -P)
+    [ -x "$candidate/bin/node" ] && { printf '%s\n' "$candidate"; return; }
+  fi
+  return 1
+}
+
+if ! NODE_HOME=$(find_node_home); then
+  echo "pi-plan-gate: no Node install with Pi found." >&2
+  echo "Install Pi with 'npm install -g @earendil-works/pi-coding-agent@$TESTED_PI' using a self-contained Node" >&2
+  echo "(official tarball, nvm, fnm or volta), or set PI_NODE_HOME to that Node's prefix." >&2
+  exit 1
+fi
+PI_VERSION=$("$NODE_HOME/bin/node" -p "require('$NODE_HOME/$PI_PACKAGE/package.json').version")
+echo "Pi $PI_VERSION in $NODE_HOME"
+[ "$PI_VERSION" = "$TESTED_PI" ] || echo "warning: tested with Pi $TESTED_PI; the bundle patches may not apply to $PI_VERSION (see /doctor)" >&2
 BASE=harness
 
 BASEDPYRIGHT_VERSION=1.40.2
@@ -55,8 +81,7 @@ install_agent_runtimes() {
 }
 
 if [ ! -x "$NODE_HOME/bin/pi" ]; then
-  echo "pi-plan-gate: Pi not found at $NODE_HOME/bin/pi." >&2
-  echo "Install @earendil-works/pi-coding-agent 1.6.x into that Node, or edit NODE_HOME here and in bin/pi." >&2
+  echo "pi-plan-gate: $NODE_HOME/bin/pi is missing; reinstall Pi into that Node." >&2
   exit 1
 fi
 for tool in /usr/bin/bwrap /usr/bin/python3 /usr/bin/git; do
@@ -86,8 +111,20 @@ install -d -m 700 "$PROTECTED"
   done
   mv -fT -- "$manifest" "$PROTECTED/install-source"
 )
+# bin/pi reads the Node prefix from here (it is not part of the manifest, so /doctor ignores it).
+printf '%s\n' "$NODE_HOME" > "$PROTECTED/node-home"
+chmod 600 "$PROTECTED/node-home"
 install_agent_runtimes
 # The bundle patches (trust notice, openable file links) live in the installed Pi; reapply after any Pi update.
 /usr/bin/python3 -I "$PROTECTED/patch-pi-bundle.py" apply "$NODE_HOME" \
   || echo "warning: a Pi bundle patch was not applied (see /doctor)" >&2
 link "$PROTECTED/pi" "$HOME/.local/bin/pi"
+
+# Recommended Pi settings (default model, long idle timeout, telemetry off). Never overwrites yours.
+if [ ! -e "$PI_AGENT_DIR/settings.json" ]; then
+  install -D -m 600 "$R/config/pi-settings.json" "$PI_AGENT_DIR/settings.json"
+  echo "$PI_AGENT_DIR/settings.json: installed recommended settings (config/pi-settings.json)"
+else
+  echo "$PI_AGENT_DIR/settings.json exists; left unchanged (compare with config/pi-settings.json)"
+fi
+[ -s "$PI_AGENT_DIR/auth.json" ] || echo "next: sign in to a model provider (run pi, then /login)"

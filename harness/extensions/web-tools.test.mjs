@@ -5,6 +5,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { createWebCache } from './web-cache.ts';
 import { sliceDocument } from './web-text.ts';
+import { testNodeHome } from './_node-home.mjs';
 
 function tmp(t) {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'pi-webcache-'));
@@ -74,7 +75,7 @@ test('tight find pages preserve the matching terms and resume at the first unrea
 });
 
 test('search and fetch output put a one-line summary first and label content untrusted', async t => {
-  const piModules = `${process.env.HOME}/.local/share/ubuntu-workstation/node/node-v24.22.2-linux-x64/lib/node_modules/@earendil-works/pi-coding-agent/node_modules`;
+  const piModules = `${testNodeHome()}/lib/node_modules/@earendil-works/pi-coding-agent/node_modules`;
   const { existsSync } = await import('node:fs');
   if (!existsSync(`${piModules}/typebox`)) { t.skip('pi-coding-agent is not installed here'); return; }
   const { register } = await import('node:module');

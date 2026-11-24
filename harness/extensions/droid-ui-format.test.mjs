@@ -4,6 +4,7 @@ import {
   autonomyBanner, compactPath, diffStats, footerDetailParts, formatElapsed, formatTurnChanges, nextDroidCycleStep, parseUiStyle,
   prefixAssistantMarkdown, summarizeToolResult, todoLines, todoSummary, toolHeader, workingMessage,
 } from './droid-ui-format.ts';
+import { testNodeHome } from './_node-home.mjs';
 
 const text = t => ({ content: [{ type: 'text', text: t }] });
 
@@ -155,7 +156,7 @@ test('turn change summary totals lines and lists the biggest files first', () =>
 });
 
 test('droid tone neutralizes violet message panels and accents on the real Pi Theme class', async t => {
-  const themeModule = `${process.env.HOME}/.local/share/ubuntu-workstation/node/node-v24.22.2-linux-x64/lib/node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/theme/theme.js`;
+  const themeModule = `${testNodeHome()}/lib/node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/theme/theme.js`;
   let mod;
   try { mod = await import(themeModule); } catch { t.skip('pi-coding-agent is not installed here'); return; }
   const { installDroidTone } = await import('./droid-ui-format.ts');

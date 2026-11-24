@@ -26,6 +26,19 @@ from urllib.parse import parse_qs, urlsplit
 
 CHECKPOINT = Path(__file__).resolve().with_name('protected-checkpoint.py')
 PI = Path.home() / '.local/bin/pi'
+
+
+def resolve_node_home():
+    """Node install that runs Pi: PI_NODE_HOME, else the path install.sh recorded, else the author's layout."""
+    if os.environ.get('PI_NODE_HOME'):
+        return Path(os.environ['PI_NODE_HOME'])
+    recorded = Path.home() / '.local/lib/pi-protected/node-home'
+    if recorded.is_file() and recorded.read_text(encoding='utf-8').strip():
+        return Path(recorded.read_text(encoding='utf-8').strip())
+    return Path.home() / '.local/share/ubuntu-workstation/node/node-v24.22.2-linux-x64'
+
+
+NODE_HOME = resolve_node_home()
 REF_PREFIX = 'refs/pi-protected-checkpoints/'
 DUMMY_SECRET = 'dummy-secret-for-protected-pi-tests'
 
@@ -877,7 +890,7 @@ class LauncherTests(Workspace):
         source.write_text('x = 1\n', encoding='utf-8')
         for idx in range(5000):
             os.link(source, venv / f'pkg_{idx:04d}.py')
-        node_home = Path.home() / '.local/share/ubuntu-workstation/node/node-v24.22.2-linux-x64'
+        node_home = NODE_HOME
         sandbox_py = CHECKPOINT.with_name('sandbox.py')
         inspect = subprocess.check_output(
             [sys.executable, '-I', str(sandbox_py), '--inspect', str(self.work)],
@@ -908,7 +921,7 @@ class LauncherTests(Workspace):
 
     def test_host_access_git_worktree_sessions_and_keys(self):
         """Default host access: Git writes and worktrees work, config/hooks stay fixed, keys stay hidden."""
-        node_home = Path.home() / '.local/share/ubuntu-workstation/node/node-v24.22.2-linux-x64'
+        node_home = NODE_HOME
         sandbox_py = CHECKPOINT.with_name('sandbox.py')
         (self.work / '.local').mkdir(exist_ok=True)
         (self.work / '.local/data.txt').write_text('visible\n', encoding='utf-8')
@@ -955,7 +968,7 @@ class LauncherTests(Workspace):
     def test_parallel_reads_read_after_write_and_fresh_secret_masking(self):
         for idx in range(3):
             (self.work / f'part_{idx}.txt').write_text(f'chunk-{idx}\n', encoding='utf-8')
-        node_home = Path.home() / '.local/share/ubuntu-workstation/node/node-v24.22.2-linux-x64'
+        node_home = NODE_HOME
         protected_dir = Path.home() / '.local/lib/pi-protected'
         script = r"""
 import path from 'node:path';
@@ -1073,7 +1086,7 @@ process.stdout.write(JSON.stringify({
 
         # Replay an identical 20-step session through the loaded extension runtime under:
         # (A) exact-match "Always allow this command" vs (B) prefix "Always allow '<prefix> …'"
-        node_home = Path.home() / '.local/share/ubuntu-workstation/node/node-v24.22.2-linux-x64'
+        node_home = NODE_HOME
         protected_dir = Path.home() / '.local/lib/pi-protected'
         script = r"""
 import path from 'node:path';
@@ -1244,7 +1257,7 @@ process.stdout.write(JSON.stringify({ exactRun, prefixRun }) + '\n');
 
     def test_sandbox_git_hardening_and_secret_history_block(self):
         sandbox = Path(__file__).resolve().with_name('sandbox.py')
-        node_home = Path.home() / '.local/share/ubuntu-workstation/node/node-v24.22.2-linux-x64'
+        node_home = NODE_HOME
 
         def run_git_tool(payload, cwd=None):
             return subprocess.run(
@@ -1327,7 +1340,7 @@ process.stdout.write(JSON.stringify({ exactRun, prefixRun }) + '\n');
     def test_sandbox_skill_mounts_readonly_and_secret_masked(self) -> None:
         sandbox = Path(__file__).resolve().with_name('sandbox.py')
         protected_dir = Path(__file__).resolve().parent
-        node_home = Path.home() / '.local/share/ubuntu-workstation/node/node-v24.22.2-linux-x64'
+        node_home = NODE_HOME
         skill_dir = self.base / 'skills' / 'deploy-helper'
         skill_dir.mkdir(parents=True)
         (skill_dir / 'SKILL.md').write_text('# Deploy Helper\nRun verified steps.\n', encoding='utf-8')
@@ -1542,7 +1555,7 @@ process.stdout.write(JSON.stringify({ exactRun, prefixRun }) + '\n');
         self.assertIn('disabled (--no-hooks)', notes_off)
 
         # 2. Exercise SessionStart, PreToolUse, PostToolUse (RO vs writable), and Stop inside real bwrap
-        node_home = Path.home() / '.local/share/ubuntu-workstation/node/node-v24.22.2-linux-x64'
+        node_home = NODE_HOME
         protected_dir = Path.home() / '.local/lib/pi-protected'
         ref = self.checkpoints()[-1]
         script = r"""
@@ -1800,7 +1813,7 @@ console.log(JSON.stringify({
         self.assertNotIn('mcp__localdocs__probe_env', notes_nomcp)
 
         # 2. Execute `mcp__localdocs__probe_env` through the loaded extension runtime and verify untrusted label + bwrap isolation
-        node_home = Path.home() / '.local/share/ubuntu-workstation/node/node-v24.22.2-linux-x64'
+        node_home = NODE_HOME
         protected_dir = Path.home() / '.local/lib/pi-protected'
         script = r"""
 import path from 'node:path';
@@ -1917,7 +1930,7 @@ console.log(JSON.stringify({ text: content[0].text, rogueBlocked }));
         self.assertIn('pi_safe_plan', doc_notes)
 
         # 2. Exercise full adaptive pi_safe_plan + Bubblewrap execution + auto-clear on completion
-        node_home = Path.home() / '.local/share/ubuntu-workstation/node/node-v24.22.2-linux-x64'
+        node_home = NODE_HOME
         protected_dir = Path.home() / '.local/lib/pi-protected'
         audit_dir = self.base / 'plan-audit'
         ref = self.checkpoints()[-1]
@@ -2244,7 +2257,7 @@ console.log(JSON.stringify({
         }), encoding='utf-8')
         os.chmod(mcp_file, 0o600)
 
-        node_home = Path.home() / '.local/share/ubuntu-workstation/node/node-v24.22.2-linux-x64'
+        node_home = NODE_HOME
         protected_dir = Path.home() / '.local/lib/pi-protected'
         isolated_install = self.base / 'isolated-protected'
         shutil.copytree(protected_dir, isolated_install)
@@ -2559,7 +2572,7 @@ console.log(JSON.stringify({
 
         # 2. Full 3-stage workflow mode inside real Bubblewrap sandbox:
         #    Stage 1 (Plan) -> Stage 2 (Ask for Permissions) -> Stage 3 (Execute with default-reject + /rejected review)
-        node_home = Path.home() / '.local/share/ubuntu-workstation/node/node-v24.22.2-linux-x64'
+        node_home = NODE_HOME
         protected_dir = Path.home() / '.local/lib/pi-protected'
         isolated_install = self.base / 'workflow-install'
         shutil.copytree(protected_dir, isolated_install)
@@ -2927,7 +2940,7 @@ console.log(JSON.stringify({
 
     def test_sandbox_broken_symlink_ls_git_safe_flags_and_codex_skill_mount(self):
         sandbox = Path(__file__).resolve().with_name('sandbox.py')
-        node_home = Path.home() / '.local/share/ubuntu-workstation/node/node-v24.22.2-linux-x64'
+        node_home = NODE_HOME
 
         # 1. Dangling symlink is surfaced explicitly by safeLs inside Bubblewrap instead of vanishing
         (self.work / 'dangling_bin').symlink_to('/nonexistent/external/runtime/bin/tool')
@@ -2966,7 +2979,7 @@ console.log(JSON.stringify({
         self.assertIn('Initial clean commit', log_fmt_res.stdout)
 
     def test_part7_paused_plan_ux_context_stability_job_wait_and_tool_snippets(self):
-        node_home = Path.home() / '.local/share/ubuntu-workstation/node/node-v24.22.2-linux-x64'
+        node_home = NODE_HOME
         protected_dir = Path.home() / '.local/lib/pi-protected'
         with self.session('--no-tools') as (rpc, res_doc):
             rpc('prompt', message='/doctor')
@@ -3309,7 +3322,7 @@ console.log(JSON.stringify({
 
     def test_part9_headless_libreoffice_gitignored_find_desktop_open_and_prompt_hygiene(self):
         sandbox = Path(__file__).resolve().with_name('sandbox.py')
-        node_home = Path.home() / '.local/share/ubuntu-workstation/node/node-v24.22.2-linux-x64'
+        node_home = NODE_HOME
         protected_dir = Path.home() / '.local/lib/pi-protected'
 
         # Obtain initial launch checkpoint ref and verify /doctor install sync
@@ -3603,9 +3616,9 @@ console.log(JSON.stringify({
         out = json.loads(proc.stdout.strip().splitlines()[-1])
 
         # Finding 2: <docs> no longer leaks host Node install paths and stays compact
-        self.assertNotIn('.local/share/ubuntu-workstation/node', out['docsSection'])
+        self.assertNotIn(str(NODE_HOME), out['docsSection'])
         self.assertNotIn('@earendil-works/pi-coding-agent', out['docsSection'])
-        self.assertNotIn('.local/share/ubuntu-workstation/node', out['fullSystemPrompt'])
+        self.assertNotIn(str(NODE_HOME), out['fullSystemPrompt'])
         self.assertIn('/open', out['docsSection'])
 
         # Finding 1b: Headless sandbox guidance & pi_safe_open tool active

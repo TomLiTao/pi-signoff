@@ -7,6 +7,7 @@ import { createEgressGuard, parseDotenvSecrets } from './egress-guard.ts';
 import { withImagesForModel } from './read-images.ts';
 import { bashOutcome, formatRunLine, leadingCommand, outputTail, runLogStore } from './run-log.ts';
 import { checkScriptGrants, makeScriptGrant, neverAutoMatch, parseScriptCommand, resolveWorkspaceModule } from './script-grants.ts';
+import { testNodeHome } from './_node-home.mjs';
 
 const policy = { secretPaths: ['.env', '.env.*'], deniedPaths: ['.git', '.git/**'], askPaths: [] };
 
@@ -113,7 +114,7 @@ test('run log helpers parse outcomes and keep a private, redacted, append-only l
 
 test('web search and fetch refuse to send text the egress guard flags, before any helper runs', async t => {
   // web-search.ts imports typebox at runtime; resolve it from pi's own install when available.
-  const piModules = `${process.env.HOME}/.local/share/ubuntu-workstation/node/node-v24.22.2-linux-x64/lib/node_modules/@earendil-works/pi-coding-agent/node_modules`;
+  const piModules = `${testNodeHome()}/lib/node_modules/@earendil-works/pi-coding-agent/node_modules`;
   const { existsSync } = await import('node:fs');
   if (!existsSync(`${piModules}/typebox`)) { t.skip('pi-coding-agent is not installed here'); return; }
   const { register } = await import('node:module');

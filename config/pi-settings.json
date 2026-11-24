@@ -1,0 +1,16 @@
+{
+  "defaultProvider": "openai-codex",
+  "defaultModel": "gpt-6.2-sol",
+  "httpIdleTimeoutMs": 1200000,
+  "cacheWarming": "off",
+  "enableInstallTelemetry": false,
+  "enableAnalytics": false,
+  "compaction": {
+    "enabled": true,
+    "reserveTokens": 16384,
+    "keepRecentTokens": 20000
+  },
+  "terminal": {
+    "showTerminalProgress": true
+  }
+}
